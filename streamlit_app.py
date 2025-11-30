@@ -586,6 +586,7 @@ st.markdown("---")
 selected_ids = st.session_state.get("selected_ids", [])
 rules = st.session_state.get("rules", [])
 id_to_name = st.session_state.get("id_to_name", {})
+timezone = st.session_state.get("timezone", "Europe/Moscow")
 disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
 
 # 只有在有选中广告和规则时才生成配置
@@ -638,31 +639,53 @@ if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
-    # 从 session_state 获取最新值
-    selected_ids = st.session_state.get("selected_ids", [])
-    rules = st.session_state.get("rules", [])
-    id_to_name = st.session_state.get("id_to_name", {})
-    timezone = st.session_state.get("timezone", "Europe/Moscow")
+    # 优先使用已生成的配置（如果存在且有效）
+    yaml_data = st.session_state.get("yaml_data", "")
     
-    # 检查是否有选中的广告和规则
-    if len(selected_ids) == 0:
-        st.error("⚠️ 请先选择要控制的广告活动。")
-    elif len(rules) == 0:
-        st.error("⚠️ 请先添加至少一个规则。")
-    else:
-        # 重新生成配置以确保是最新的
-        yaml_data = build_yaml_config(selected_ids, id_to_name, rules, timezone)
-        if not yaml_data or len(yaml_data.strip()) == 0:
-            st.error("⚠️ 配置生成失败，请检查设置。")
+    # 如果 session_state 中没有配置，或者配置只是提示信息，则重新生成
+    if not yaml_data or yaml_data.strip().startswith("# 请先"):
+        # 从 session_state 获取最新值
+        selected_ids = st.session_state.get("selected_ids", [])
+        rules = st.session_state.get("rules", [])
+        id_to_name = st.session_state.get("id_to_name", {})
+        timezone = st.session_state.get("timezone", "Europe/Moscow")
+        
+        # 检查是否有选中的广告和规则
+        if len(selected_ids) == 0:
+            st.error("⚠️ 请先选择要控制的广告活动。")
+        elif len(rules) == 0:
+            st.error("⚠️ 请先添加至少一个规则。")
         else:
-            try:
-                r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
-                if r.status_code == 200:
-                    st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+            # 检查规则是否有效（是否有 periods）
+            valid_rules = [r for r in rules if r.get("periods") and len(r.get("periods", [])) > 0]
+            if len(valid_rules) == 0:
+                st.error("⚠️ 请确保规则中至少有一个时间段已配置。")
+            else:
+                # 重新生成配置以确保是最新的
+                yaml_data = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+                if not yaml_data or len(yaml_data.strip()) == 0:
+                    st.error("⚠️ 配置生成失败，请检查设置。")
                 else:
-                    st.error(f"保存失败: {r.status_code} {r.text}")
-            except Exception as e:
-                st.error(f"保存时发生错误: {str(e)}")
+                    # 保存配置并发送到服务器
+                    st.session_state["yaml_data"] = yaml_data
+                    try:
+                        r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+                        if r.status_code == 200:
+                            st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+                        else:
+                            st.error(f"保存失败: {r.status_code} {r.text}")
+                    except Exception as e:
+                        st.error(f"保存时发生错误: {str(e)}")
+    else:
+        # 使用已生成的配置
+        try:
+            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+            if r.status_code == 200:
+                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+            else:
+                st.error(f"保存失败: {r.status_code} {r.text}")
+        except Exception as e:
+            st.error(f"保存时发生错误: {str(e)}")
 
 # 立即执行一次（按当前时间立即执行一次）
 st.markdown("### ⏱ 立即执行一次（测试用）")
