@@ -577,7 +577,14 @@ st.markdown("---")
 # 生成 YAML
 disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
 id_to_name = st.session_state.get("id_to_name", {})
-yaml_str = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+
+# 只有在有选中广告和规则时才生成配置
+if not disabled_generate:
+    yaml_str = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+    # 保存到 session_state 供后续使用
+    st.session_state["yaml_data"] = yaml_str
+else:
+    yaml_str = "# 请先选择广告活动并添加规则，配置将在此显示"
 
 st.markdown("#### 📄 生成的配置文件")
 with st.expander("💡 关于配置格式的说明", expanded=False):
@@ -603,8 +610,6 @@ with st.expander("💡 关于配置格式的说明", expanded=False):
     """)
 
 st.code(yaml_str, language="yaml")
-# 保存到 session_state 供后续使用
-st.session_state["yaml_data"] = yaml_str
 
 st.markdown("#### 📥 下载配置文件")
 st.markdown("""
@@ -623,18 +628,25 @@ if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
-    yaml_data = st.session_state.get("yaml_data", yaml_str)
-    if not yaml_data:
-        st.error("⚠️ 当前没有生成配置，请先在上方选择广告 + 规则。")
+    # 检查是否有选中的广告和规则
+    if len(selected_ids) == 0:
+        st.error("⚠️ 请先选择要控制的广告活动。")
+    elif len(rules) == 0:
+        st.error("⚠️ 请先添加至少一个规则。")
     else:
-        try:
-            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
-            if r.status_code == 200:
-                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
-            else:
-                st.error(f"保存失败: {r.status_code} {r.text}")
-        except Exception as e:
-            st.error(str(e))
+        # 重新生成配置以确保是最新的
+        yaml_data = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+        if not yaml_data or len(yaml_data.strip()) == 0:
+            st.error("⚠️ 配置生成失败，请检查设置。")
+        else:
+            try:
+                r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+                if r.status_code == 200:
+                    st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+                else:
+                    st.error(f"保存失败: {r.status_code} {r.text}")
+            except Exception as e:
+                st.error(f"保存时发生错误: {str(e)}")
 
 # 立即执行一次（按当前时间立即执行一次）
 st.markdown("### ⏱ 立即执行一次（测试用）")
