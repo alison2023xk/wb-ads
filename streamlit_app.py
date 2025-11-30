@@ -22,31 +22,6 @@ import requests
 import streamlit as st
 import yaml
 
-yaml_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
-st.session_state["yaml_data"] = yaml_text   # ← 关键：把文本放进会话状态
-st.code(yaml_text, language="yaml")
-import requests, os
-
-API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
-HEADERS = {}
-if os.environ.get("API_GATEWAY_TOKEN"):
-    HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
-
-if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
-    data = st.session_state.get("yaml_data", "")
-    if not data:
-        st.error("⚠️ 当前没有生成配置，请先在上方选择广告 + 规则。")
-    else:
-        try:
-            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=data.encode("utf-8"))
-            if r.status_code == 200:
-                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
-            else:
-                st.error(f"保存失败：{r.status_code} {r.text}")
-        except Exception as e:
-            st.error(str(e))
-
-
 WB_API_BASE = "https://advert-api.wildberries.ru"
 
 STATUS_LABELS = {
@@ -60,7 +35,10 @@ STATUS_LABELS = {
 
 def get_token_from_env_or_secrets() -> str:
     # 优先 Streamlit Secrets，其次环境变量
-    token = st.secrets.get("WB_PROMO_TOKEN", "")
+    try:
+        token = st.secrets.get("WB_PROMO_TOKEN", "")
+    except (AttributeError, FileNotFoundError, KeyError):
+        token = ""
     if not token:
         token = os.environ.get("WB_PROMO_TOKEN", "")
     return token
@@ -625,6 +603,8 @@ with st.expander("💡 关于配置格式的说明", expanded=False):
     """)
 
 st.code(yaml_str, language="yaml")
+# 保存到 session_state 供后续使用
+st.session_state["yaml_data"] = yaml_str
 
 st.markdown("#### 📥 下载配置文件")
 st.markdown("""
@@ -635,24 +615,28 @@ st.markdown("""
 2. 运行 `wb_ad_auto_scheduler.py` 脚本，指定配置文件路径
 3. 脚本会在后台持续运行，按照配置的时间规则自动执行
 """)
-import requests, os, streamlit as st
+
+# 保存到服务器功能
 API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
 HEADERS = {}
 if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
-    try:
-        r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
-        if r.status_code == 200:
-            st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
-        else:
-            st.error(f"保存失败: {r.status_code} {r.text}")
-    except Exception as e:
-        st.error(str(e))
+    yaml_data = st.session_state.get("yaml_data", yaml_str)
+    if not yaml_data:
+        st.error("⚠️ 当前没有生成配置，请先在上方选择广告 + 规则。")
+    else:
+        try:
+            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+            if r.status_code == 200:
+                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+            else:
+                st.error(f"保存失败: {r.status_code} {r.text}")
+        except Exception as e:
+            st.error(str(e))
 
-
-Run once（按当前时间立即执行一次）
+# 立即执行一次（按当前时间立即执行一次）
 st.markdown("### ⏱ 立即执行一次（测试用）")
 st.info("💡 **提示**：此功能只执行一次，不会自动重复。要实现定时自动执行，请使用 `wb_ad_auto_scheduler.py` 脚本。")
 if st.button("🚀 立即执行一次（根据当前时间判断应该执行的动作）", disabled=(not token or disabled_generate)):

@@ -1,0 +1,44 @@
+# Wildberries 广告定时开关示例配置
+timezone: "Europe/Berlin"
+msk_timezone: "Europe/Moscow"
+
+rate_limit:
+  per_second: 4
+  burst: 4
+
+wb:
+  api_base: "https://advert-api.wildberries.ru"
+  token_env: "WB_PROMO_TOKEN"
+
+rules:
+  - name: "工作日-白天-启动"
+    targets:
+      type: "ids"
+      ids: [12345, 67890]     # 替换为你的活动ID
+    weekdays: [1,2,3,4,5]     # 1=周一 … 7=周日
+    periods:
+      - { start: "08:30", end: "12:00", action: "start" }
+      - { start: "14:00", end: "18:30", action: "start" }
+    exclude_dates: ["2025-12-31","2026-01-01"]
+    priority: 100
+    enabled: true
+
+  - name: "午间-暂停"
+    targets:
+      type: "ids"
+      ids: [12345, 67890]
+    weekdays: [1,2,3,4,5]
+    periods:
+      - { start: "12:00", end: "14:00", action: "pause" }
+    priority: 200
+    enabled: true
+
+  - name: "夜间-全周-暂停（跨天）"
+    targets:
+      type: "ids"
+      ids: [12345, 67890]
+    weekdays: [1,2,3,4,5,6,7]
+    periods:
+      - { start: "22:00", end: "06:00", action: "pause" }
+    priority: 50
+    enabled: true
