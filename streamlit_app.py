@@ -202,9 +202,10 @@ def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], rules
         "rules": yaml_rules,
     }
     yaml_str = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
+    lines = yaml_str.split('\n')
+    
     # 在ids行后添加注释，显示每个ID对应的名称
     if adverts_info:
-        lines = yaml_str.split('\n')
         for i, line in enumerate(lines):
             if 'ids:' in line:
                 # 找到ids行的缩进
@@ -217,7 +218,17 @@ def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], rules
                 # 在ids行后插入注释
                 lines.insert(i + 1, '\n'.join(comment_lines))
                 break
-        yaml_str = '\n'.join(lines)
+    
+    # 在periods部分添加注释说明
+    for i, line in enumerate(lines):
+        if 'periods:' in line:
+            indent = len(line) - len(line.lstrip())
+            # 添加说明注释
+            comment = ' ' * indent + "# 说明：每个时间段会生成两个period，开始时间执行start动作，结束时间执行stop动作"
+            lines.insert(i + 1, comment)
+            break
+    
+    yaml_str = '\n'.join(lines)
     return yaml_str
 
 def in_period(now_t: dtime, start_t: dtime, end_t: dtime) -> bool:
@@ -511,7 +522,9 @@ for rule_idx, rule in enumerate(rules):
             start_str = tr["start"]
             end_str = tr["end"]
             
-            # 开始时间执行start动作（使用1分钟窗口确保能匹配）
+            # 开始时间执行start动作
+            # 注意：end设置为start+1分钟是为了确保在精确时间点能匹配到
+            # 因为period匹配使用的是 [start, end) 左闭右开区间
             start_time_obj = datetime.strptime(start_str, "%H:%M").time()
             start_dt = datetime.combine(date.today(), start_time_obj)
             start_plus_1min = (start_dt + timedelta(minutes=1)).time()
@@ -519,11 +532,12 @@ for rule_idx, rule in enumerate(rules):
             
             periods.append({
                 "start": start_str, 
-                "end": start_end_str,
+                "end": start_end_str,  # 开始时间+1分钟，用于精确时间点匹配
                 "action": "start"
             })
             
-            # 结束时间执行stop动作（使用1分钟窗口确保能匹配）
+            # 结束时间执行stop动作
+            # 注意：end设置为end+1分钟是为了确保在精确时间点能匹配到
             end_time_obj = datetime.strptime(end_str, "%H:%M").time()
             end_dt = datetime.combine(date.today(), end_time_obj)
             end_plus_1min = (end_dt + timedelta(minutes=1)).time()
@@ -531,7 +545,7 @@ for rule_idx, rule in enumerate(rules):
             
             periods.append({
                 "start": end_str, 
-                "end": end_end_str,
+                "end": end_end_str,  # 结束时间+1分钟，用于精确时间点匹配
                 "action": "stop"
             })
         
@@ -561,6 +575,30 @@ st.markdown("---")
 disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
 id_to_name = st.session_state.get("id_to_name", {})
 yaml_str = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+
+st.markdown("#### 📄 生成的配置文件")
+with st.expander("💡 关于配置格式的说明", expanded=False):
+    st.markdown("""
+    **为什么每个时间段会生成两个period？**
+    
+    - 你设置的每个时间段（开始时间 + 结束时间）会被转换为两个period：
+      - **开始时间**：执行 `start` 动作（启动广告）
+      - **结束时间**：执行 `stop` 动作（停止广告）
+    
+    **为什么end时间是start+1分钟？**
+    
+    - 例如：开始时间 09:00 会显示为 `start: 09:00, end: 09:01`
+    - 这是因为period匹配使用的是 `[start, end)` 左闭右开区间
+    - 使用1分钟窗口确保在精确时间点（09:00）能正确匹配到
+    - 实际执行时，会在 09:00 这一分钟内的任意时刻执行start动作
+    
+    **示例：**
+    - 如果你设置：开始时间 13:00，结束时间 22:00
+    - 配置中会显示：
+      - `start: 13:00, end: 13:01, action: start` （在13:00执行启动）
+      - `start: 22:00, end: 22:01, action: stop` （在22:00执行停止）
+    """)
+
 st.code(yaml_str, language="yaml")
 
 st.markdown("#### 📥 下载配置文件")
