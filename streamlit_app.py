@@ -22,6 +22,47 @@ import requests
 import streamlit as st
 import yaml
 
+import requests
+import pandas as pd
+import streamlit as st
+
+@st.cache_data(ttl=300)  # 缓存 5 分钟
+def fetch_campaign_names(api_token: str, types: list[int] | None = None) -> pd.DataFrame:
+    """
+    返回列：campaign_id, name
+    注：这里的 URL/参数名根据你实际对接的 WB 广告接口改；关键是要拿到 [id, name]。
+    """
+    if not api_token:
+        return pd.DataFrame(columns=["campaign_id", "name"])
+
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    # 例：分别拉“统一/自定义/类型9”等你支持的类型；如果你的接口支持一次性拉取，可简化为一次请求
+    all_rows = []
+    for t in (types or [9]):  # 9 只是示意；替换成你实际支持的类型
+        try:
+            # ❗把这行替换成你现有的“广告活动列表/详情”接口
+            url = "https://advert-api.wildberries.ru/adv/<your-list-endpoint>"
+            params = {"type": t}
+            resp = requests.get(url, headers=headers, params=params, timeout=20)
+            resp.raise_for_status()
+            data = resp.json() or []
+
+            for item in data:
+                cid = item.get("id") or item.get("campaignId")
+                name = item.get("name") or item.get("title")
+                if cid is not None:
+                    all_rows.append({"campaign_id": int(cid), "name": (name or "").strip()})
+        except Exception as e:
+            st.warning(f"拉取类型 {t} 名称失败：{e}")
+
+    df = pd.DataFrame(all_rows).drop_duplicates(subset=["campaign_id"])
+    return df
+
+
 WB_API_BASE = "https://advert-api.wildberries.ru"
 
 STATUS_LABELS = {
