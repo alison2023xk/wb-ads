@@ -15,7 +15,7 @@
 """
 import os
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta, date
 from typing import List, Dict, Tuple
 
 import requests
@@ -186,7 +186,7 @@ def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], rules
             "weekdays": rule.get("weekdays", []),
             "periods": rule.get("periods", []),
             "exclude_dates": rule.get("exclude_dates", []),
-            "priority": rule.get("priority", 100),
+            "priority": 100,  # 固定优先级，不再需要用户设置
             "enabled": rule.get("enabled", True),
         }
         yaml_rules.append(yaml_rule)
@@ -395,8 +395,8 @@ with col_add:
         st.session_state["rules"].append({
             "name": f"规则 {len(st.session_state['rules']) + 1}",
             "weekdays": [],
-            "periods": [],
-            "priority": 100,
+            "time_ranges": [],  # 存储原始时间段
+            "periods": [],  # 会在生成时自动填充
             "enabled": True
         })
 with col_clear:
@@ -418,11 +418,9 @@ if not rules:
 for rule_idx, rule in enumerate(rules):
     with st.expander(f"📌 {rule.get('name', f'规则 {rule_idx + 1}')} {'✅' if rule.get('enabled', True) else '❌'}", expanded=True):
         # 规则名称和基本设置
-        col_name, col_priority, col_enabled = st.columns([2, 1, 1])
+        col_name, col_enabled = st.columns([3, 1])
         with col_name:
             rule["name"] = st.text_input("规则名称", value=rule.get("name", f"规则 {rule_idx + 1}"), key=f"rule_name_{rule_idx}")
-        with col_priority:
-            rule["priority"] = st.number_input("优先级", min_value=0, max_value=1000, value=rule.get("priority", 100), key=f"rule_priority_{rule_idx}", help="数字越大优先级越高")
         with col_enabled:
             rule["enabled"] = st.checkbox("启用", value=rule.get("enabled", True), key=f"rule_enabled_{rule_idx}")
         
@@ -439,9 +437,14 @@ for rule_idx, rule in enumerate(rules):
         # 时间段设置
         st.markdown("**时间段设置**")
         # 获取当前时间段数量，确保至少为1
-        current_periods_count = len(rule.get("periods", []))
-        if current_periods_count == 0:
-            current_periods_count = 1
+        # 优先从time_ranges获取，如果没有则从periods推断（每个时间段对应2个period）
+        time_ranges = rule.get("time_ranges", [])
+        if time_ranges:
+            current_periods_count = len(time_ranges)
+        else:
+            # 从旧的periods格式推断（每2个period = 1个时间段）
+            periods_count = len(rule.get("periods", []))
+            current_periods_count = max(1, periods_count // 2) if periods_count > 0 else 1
         
         # 使用number_input，直接使用rule中的periods长度作为初始值
         # 使用key来让Streamlit管理状态，避免手动管理session_state
@@ -454,39 +457,82 @@ for rule_idx, rule in enumerate(rules):
             key=f"n_periods_{rule_idx}"  # 使用统一的key，让Streamlit自动管理
         )
         
-        # 初始化periods
-        if len(rule.get("periods", [])) < n_periods:
-            for i in range(len(rule.get("periods", [])), n_periods):
-                rule.setdefault("periods", []).append({"start": "09:00", "end": "18:00", "action": "start"})
-        elif len(rule.get("periods", [])) > n_periods:
-            rule["periods"] = rule["periods"][:n_periods]
+        # 注意：periods会在下面重新生成，这里不需要初始化
+        # 因为每个时间段会被转换为两个period（开始和结束）
         
-        periods = []
+        # 存储原始时间段（开始时间和结束时间对）
+        time_ranges = []
         for i in range(n_periods):
             st.markdown(f"**时间段 {i+1}**")
-            c1, c2, c3 = st.columns([1, 1, 1])
+            st.info("💡 开始时间执行开始动作，结束时间执行结束动作")
             
             # 获取已有的时间段数据
-            existing_period = rule.get("periods", [{}])[i] if i < len(rule.get("periods", [])) else {}
-            start_str = existing_period.get("start", "09:00")
-            end_str = existing_period.get("end", "18:00")
-            action_str = existing_period.get("action", "start")
+            # 从rule中获取原始时间段数据（如果存在）
+            existing_ranges = rule.get("time_ranges", [])
+            if i < len(existing_ranges):
+                existing_range = existing_ranges[i]
+                start_str = existing_range.get("start", "09:00")
+                end_str = existing_range.get("end", "18:00")
+            else:
+                # 如果没有，尝试从旧的periods格式中解析
+                existing_periods = rule.get("periods", [])
+                if existing_periods and len(existing_periods) >= 2 * i + 1:
+                    # 旧的格式：每两个period代表一个时间段
+                    start_period = existing_periods[2 * i]
+                    end_period = existing_periods[2 * i + 1] if 2 * i + 1 < len(existing_periods) else existing_periods[2 * i]
+                    start_str = start_period.get("start", "09:00")
+                    end_str = end_period.get("start", "18:00")  # 结束时间的start字段
+                else:
+                    start_str = "09:00"
+                    end_str = "18:00"
             
             # 解析时间字符串
             start_h, start_m = map(int, start_str.split(":"))
             end_h, end_m = map(int, end_str.split(":"))
             
+            c1, c2 = st.columns([1, 1])
             with c1:
-                start_time = st.time_input(f"开始时间", value=dtime(start_h, start_m), key=f"start_{rule_idx}_{i}")
+                start_time = st.time_input(f"开始时间（执行开始动作）", value=dtime(start_h, start_m), key=f"start_{rule_idx}_{i}")
             with c2:
-                end_time = st.time_input(f"结束时间", value=dtime(end_h, end_m), key=f"end_{rule_idx}_{i}")
-            with c3:
-                action = st.selectbox(f"动作", ["start","pause","stop"], index=["start","pause","stop"].index(action_str) if action_str in ["start","pause","stop"] else 0, key=f"act_{rule_idx}_{i}")
+                end_time = st.time_input(f"结束时间（执行结束动作）", value=dtime(end_h, end_m), key=f"end_{rule_idx}_{i}")
+            
+            # 存储原始时间段
+            time_ranges.append({
+                "start": start_time.strftime("%H:%M"), 
+                "end": end_time.strftime("%H:%M")
+            })
+        
+        # 保存原始时间段
+        rule["time_ranges"] = time_ranges
+        
+        # 转换为periods格式（用于YAML配置）
+        periods = []
+        for tr in time_ranges:
+            start_str = tr["start"]
+            end_str = tr["end"]
+            
+            # 开始时间执行start动作（使用1分钟窗口确保能匹配）
+            start_time_obj = datetime.strptime(start_str, "%H:%M").time()
+            start_dt = datetime.combine(date.today(), start_time_obj)
+            start_plus_1min = (start_dt + timedelta(minutes=1)).time()
+            start_end_str = start_plus_1min.strftime("%H:%M")
             
             periods.append({
-                "start": start_time.strftime("%H:%M"), 
-                "end": end_time.strftime("%H:%M"), 
-                "action": action
+                "start": start_str, 
+                "end": start_end_str,
+                "action": "start"
+            })
+            
+            # 结束时间执行stop动作（使用1分钟窗口确保能匹配）
+            end_time_obj = datetime.strptime(end_str, "%H:%M").time()
+            end_dt = datetime.combine(date.today(), end_time_obj)
+            end_plus_1min = (end_dt + timedelta(minutes=1)).time()
+            end_end_str = end_plus_1min.strftime("%H:%M")
+            
+            periods.append({
+                "start": end_str, 
+                "end": end_end_str,
+                "action": "stop"
             })
         
         rule["periods"] = periods
