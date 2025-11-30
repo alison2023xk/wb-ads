@@ -610,15 +610,24 @@ st.markdown("""
 2. 运行 `wb_ad_auto_scheduler.py` 脚本，指定配置文件路径
 3. 脚本会在后台持续运行，按照配置的时间规则自动执行
 """)
-st.download_button(
-    "⬇️ 下载 YAML 配置（wb_scheduler.config.yaml）",
-    data=yaml_str.encode("utf-8"),
-    file_name="wb_scheduler.config.yaml",
-    mime="text/yaml",
-    disabled=disabled_generate
-)
+import requests, os, streamlit as st
+API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
+HEADERS = {}
+if os.environ.get("API_GATEWAY_TOKEN"):
+    HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
-# Run once（按当前时间立即执行一次）
+if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
+    try:
+        r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+        if r.status_code == 200:
+            st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+        else:
+            st.error(f"保存失败: {r.status_code} {r.text}")
+    except Exception as e:
+        st.error(str(e))
+
+
+Run once（按当前时间立即执行一次）
 st.markdown("### ⏱ 立即执行一次（测试用）")
 st.info("💡 **提示**：此功能只执行一次，不会自动重复。要实现定时自动执行，请使用 `wb_ad_auto_scheduler.py` 脚本。")
 if st.button("🚀 立即执行一次（根据当前时间判断应该执行的动作）", disabled=(not token or disabled_generate)):
