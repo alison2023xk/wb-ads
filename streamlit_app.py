@@ -22,47 +22,6 @@ import requests
 import streamlit as st
 import yaml
 
-import requests
-import pandas as pd
-import streamlit as st
-
-@st.cache_data(ttl=300)  # 缓存 5 分钟
-def fetch_campaign_names(api_token: str, types: list[int] | None = None) -> pd.DataFrame:
-    """
-    返回列：campaign_id, name
-    注：这里的 URL/参数名根据你实际对接的 WB 广告接口改；关键是要拿到 [id, name]。
-    """
-    if not api_token:
-        return pd.DataFrame(columns=["campaign_id", "name"])
-
-    headers = {
-        "Authorization": f"Bearer {api_token}",
-        "Content-Type": "application/json",
-    }
-
-    # 例：分别拉“统一/自定义/类型9”等你支持的类型；如果你的接口支持一次性拉取，可简化为一次请求
-    all_rows = []
-    for t in (types or [9]):  # 9 只是示意；替换成你实际支持的类型
-        try:
-            # ❗把这行替换成你现有的“广告活动列表/详情”接口
-            url = "https://advert-api.wildberries.ru/adv/<your-list-endpoint>"
-            params = {"type": t}
-            resp = requests.get(url, headers=headers, params=params, timeout=20)
-            resp.raise_for_status()
-            data = resp.json() or []
-
-            for item in data:
-                cid = item.get("id") or item.get("campaignId")
-                name = item.get("name") or item.get("title")
-                if cid is not None:
-                    all_rows.append({"campaign_id": int(cid), "name": (name or "").strip()})
-        except Exception as e:
-            st.warning(f"拉取类型 {t} 名称失败：{e}")
-
-    df = pd.DataFrame(all_rows).drop_duplicates(subset=["campaign_id"])
-    return df
-
-
 WB_API_BASE = "https://advert-api.wildberries.ru"
 
 STATUS_LABELS = {
@@ -135,7 +94,13 @@ def wb_stop(token: str, advert_id: int) -> str:
     r = requests.get(f"{WB_API_BASE}/adv/v0/stop", headers={"Authorization": token}, params={"id": advert_id}, timeout=20)
     return f"{r.status_code} {r.text}"
 
-def build_yaml_config(selected_ids: List[int], weekdays: List[int], periods: List[dict], timezone: str) -> str:
+def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], weekdays: List[int], periods: List[dict], timezone: str) -> str:
+    # 构建广告ID到名称的映射注释
+    adverts_info = []
+    for adv_id in selected_ids:
+        name = id_to_name.get(adv_id, "未命名")
+        adverts_info.append(f"  # {name} (ID: {adv_id})")
+    
     cfg = {
         "timezone": timezone,
         "msk_timezone": "Europe/Moscow",
@@ -156,7 +121,17 @@ def build_yaml_config(selected_ids: List[int], weekdays: List[int], periods: Lis
             }
         ],
     }
-    return yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
+    yaml_str = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
+    # 在targets部分添加广告名称注释
+    if adverts_info:
+        lines = yaml_str.split('\n')
+        for i, line in enumerate(lines):
+            if 'ids:' in line:
+                # 在ids行后插入注释
+                lines.insert(i + 1, '\n'.join(adverts_info))
+                break
+        yaml_str = '\n'.join(lines)
+    return yaml_str
 
 def in_period(now_t: dtime, start_t: dtime, end_t: dtime) -> bool:
     if start_t <= end_t:
@@ -223,10 +198,14 @@ if adverts:
 
     # 选择广告（按名称显示，值为 id）
     options = {f'{row["名称"] or "未命名"} (#{row["ID"]})': row["ID"] for row in df}
+    # 创建ID到名称的映射
+    id_to_name = {row["ID"]: row["名称"] or "未命名" for row in df}
     selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
     selected_ids = [options[k] for k in selected_labels]
+    st.session_state["id_to_name"] = id_to_name
 else:
     selected_ids = []
+    st.session_state["id_to_name"] = {}
 
 st.markdown("---")
 
@@ -261,7 +240,8 @@ st.markdown("---")
 
 # 生成 YAML
 disabled_generate = (len(selected_ids) == 0)
-yaml_str = build_yaml_config(selected_ids, weekdays, periods, timezone)
+id_to_name = st.session_state.get("id_to_name", {})
+yaml_str = build_yaml_config(selected_ids, id_to_name, weekdays, periods, timezone)
 st.code(yaml_str, language="yaml")
 
 st.download_button(
@@ -281,13 +261,24 @@ if st.button("执行（对所选广告按当前时刻决定 start/pause/stop）"
         st.info("当前时刻未命中任何时间段，不执行。")
     else:
         results = []
+        id_to_name = st.session_state.get("id_to_name", {})
         for adv_id in selected_ids:
+            adv_name = id_to_name.get(adv_id, "未命名")
             if act == "start":
                 res = wb_start(token, adv_id)
             elif act == "pause":
                 res = wb_pause(token, adv_id)
             else:
                 res = wb_stop(token, adv_id)
-            results.append((adv_id, act, res))
+            results.append({
+                "id": adv_id,
+                "name": adv_name,
+                "action": act,
+                "result": res
+            })
         st.success("执行完成")
+        # 以表格形式显示结果
+        import pandas as pd
+        results_df = pd.DataFrame(results)
+        st.dataframe(results_df)
         st.json({"results": results})
