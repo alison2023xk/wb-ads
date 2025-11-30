@@ -307,7 +307,7 @@ class DecisionEngine:
 
 # ------------------------------ 主循环 ------------------------------
 
-def load_config(path: str) -> Config:
+def load_config(path: str) -> Tuple[Config, Dict]:
     if not os.path.exists(path):
         # 写一个示例配置
         sample = SAMPLE_CONFIG_YAML
@@ -359,19 +359,38 @@ def load_config(path: str) -> Config:
         token_env=raw.get("wb", {}).get("token_env", ENV_TOKEN_KEY),
         rules=rules,
     )
-    return cfg
+    return cfg, raw
 
-def build_campaigns_from_config(cfg: Config) -> List[CampaignMeta]:
+def build_campaigns_from_config(cfg: Config, raw_config: Optional[Dict] = None) -> Tuple[List[CampaignMeta], Dict[int, str]]:
     """
-    简化：从规则中抽取所有提到的 advert_id（ids 目标），并去重。
-    若你希望按 name_prefix/tags 动态匹配，需要扩展此处改为“从你的活动库/数据库加载全部活动元数据”。
+    从规则中抽取所有提到的 advert_id（ids 目标），并去重。
+    同时从配置中提取广告ID到名称的映射（如果存在）。
+    
+    返回: (campaigns列表, id_to_name映射字典)
     """
     ids: set[int] = set()
+    id_to_name: Dict[int, str] = {}
+    
+    # 从规则中提取ID
     for r in cfg.rules:
         if r.targets.type == "ids" and r.targets.ids:
             ids.update(r.targets.ids)
-    campaigns = [CampaignMeta(advert_id=i) for i in sorted(ids)]
-    return campaigns
+    
+    # 从原始配置中提取广告名称映射（如果存在）
+    if raw_config:
+        for rule in raw_config.get("rules", []):
+            targets = rule.get("targets", {})
+            if targets.get("type") == "ids" and "adverts" in targets:
+                adverts = targets.get("adverts", {})
+                if isinstance(adverts, dict):
+                    for adv_id, name in adverts.items():
+                        try:
+                            id_to_name[int(adv_id)] = str(name)
+                        except (ValueError, TypeError):
+                            pass
+    
+    campaigns = [CampaignMeta(advert_id=i, name=id_to_name.get(i, "")) for i in sorted(ids)]
+    return campaigns, id_to_name
 
 def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
@@ -392,12 +411,12 @@ def main():
 
     setup_logging(args.verbose)
 
-    cfg = load_config(args.config)
+    cfg, raw_config = load_config(args.config)
 
     tz = cfg.timezone
     if ZoneInfo is None:
         logging.warning("未检测到 zoneinfo，时区精度可能受限，建议使用 Python 3.9+")
-    campaigns = build_campaigns_from_config(cfg)
+    campaigns, id_to_name = build_campaigns_from_config(cfg, raw_config)
 
     token = os.environ.get(cfg.token_env, "").strip()
     if not token and not args.dry_run:
@@ -418,11 +437,16 @@ def main():
         # 对每个活动，应用单一决策
         for d in decisions:
             if engine.should_skip_idempotent(d.advert_id, d.desired, now_dt):
-                logging.debug("幂等跳过：advert_id=%s desired=%s", d.advert_id, d.desired)
+                adv_name = id_to_name.get(d.advert_id, "")
+                name_str = f" ({adv_name})" if adv_name else ""
+                logging.debug("幂等跳过：advert_id=%s%s desired=%s", d.advert_id, name_str, d.desired)
                 continue
 
-            logging.info("规则命中 | %s | advert_id=%s | action=%s", d.rule_name, d.advert_id, d.desired)
+            adv_name = id_to_name.get(d.advert_id, "")
+            name_str = f" ({adv_name})" if adv_name else ""
+            logging.info("规则命中 | %s | advert_id=%s%s | action=%s", d.rule_name, d.advert_id, name_str, d.desired)
             if args.dry_run:
+                logging.info("[DRY-RUN] 将执行: advert_id=%s%s action=%s", d.advert_id, name_str, d.desired)
                 continue
 
             # 调用 API
@@ -438,20 +462,23 @@ def main():
                     logging.error("未知动作：%s", d.desired)
                     continue
             except Exception as e:
-                logging.error("API 调用异常 advert_id=%s action=%s err=%s", d.advert_id, d.desired, e)
+                logging.error("API 调用异常 advert_id=%s%s action=%s err=%s", d.advert_id, name_str, d.desired, e)
                 continue
 
             if ok:
-                logging.info("API 成功 | advert_id=%s action=%s", d.advert_id, d.desired)
+                logging.info("API 成功 | advert_id=%s%s action=%s", d.advert_id, name_str, d.desired)
             else:
-                logging.error("API 失败 | advert_id=%s action=%s | %s", d.advert_id, d.desired, msg)
+                logging.error("API 失败 | advert_id=%s%s action=%s | %s", d.advert_id, name_str, d.desired, msg)
 
     # 主循环
     if args.once:
         one_cycle()
         return
 
-    logging.info("启动定时器：每 %s 秒扫描一次；时区=%s；活动数=%d", args.interval, tz, len(campaigns))
+    campaigns_info = ", ".join([f"{c.advert_id}" + (f"({c.name})" if c.name else "") for c in campaigns[:5]])
+    if len(campaigns) > 5:
+        campaigns_info += f" ... 共{len(campaigns)}个"
+    logging.info("启动定时器：每 %s 秒扫描一次；时区=%s；活动数=%d [%s]", args.interval, tz, len(campaigns), campaigns_info)
     try:
         while True:
             one_cycle()
