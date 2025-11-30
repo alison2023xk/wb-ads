@@ -638,9 +638,25 @@ HEADERS = {}
 if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
+# 添加调试信息显示选项
+show_save_debug = st.checkbox("显示保存调试信息", value=False, key="show_save_debug", help="显示保存过程中的详细调试信息")
+
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
     # 优先使用已生成的配置（如果存在且有效）
     yaml_data = st.session_state.get("yaml_data", "")
+    
+    # 显示调试信息
+    if show_save_debug:
+        with st.expander("🔍 保存调试信息", expanded=True):
+            st.write("**Session State 状态:**")
+            st.write(f"- selected_ids: {st.session_state.get('selected_ids', [])}")
+            st.write(f"- rules 数量: {len(st.session_state.get('rules', []))}")
+            st.write(f"- yaml_data 存在: {bool(yaml_data)}")
+            st.write(f"- yaml_data 长度: {len(yaml_data) if yaml_data else 0}")
+            st.write(f"- yaml_data 前100字符: {yaml_data[:100] if yaml_data else 'None'}")
+            if st.session_state.get('rules'):
+                for i, rule in enumerate(st.session_state.get('rules', [])):
+                    st.write(f"- 规则 {i+1}: name={rule.get('name')}, periods数量={len(rule.get('periods', []))}")
     
     # 如果 session_state 中没有配置，或者配置只是提示信息，则重新生成
     if not yaml_data or yaml_data.strip().startswith("# 请先"):
@@ -650,42 +666,129 @@ if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
         id_to_name = st.session_state.get("id_to_name", {})
         timezone = st.session_state.get("timezone", "Europe/Moscow")
         
+        if show_save_debug:
+            with st.expander("🔍 重新生成配置调试信息", expanded=True):
+                st.write(f"- selected_ids: {selected_ids}")
+                st.write(f"- rules 数量: {len(rules)}")
+                st.write(f"- timezone: {timezone}")
+        
         # 检查是否有选中的广告和规则
         if len(selected_ids) == 0:
-            st.error("⚠️ 请先选择要控制的广告活动。")
+            error_msg = "⚠️ 请先选择要控制的广告活动。"
+            if show_save_debug:
+                error_msg += f"\n\n**调试信息:** selected_ids = {selected_ids}"
+            st.error(error_msg)
         elif len(rules) == 0:
-            st.error("⚠️ 请先添加至少一个规则。")
+            error_msg = "⚠️ 请先添加至少一个规则。"
+            if show_save_debug:
+                error_msg += f"\n\n**调试信息:** rules = {rules}"
+            st.error(error_msg)
         else:
             # 检查规则是否有效（是否有 periods）
             valid_rules = [r for r in rules if r.get("periods") and len(r.get("periods", [])) > 0]
             if len(valid_rules) == 0:
-                st.error("⚠️ 请确保规则中至少有一个时间段已配置。")
+                error_msg = "⚠️ 请确保规则中至少有一个时间段已配置。"
+                if show_save_debug:
+                    error_msg += f"\n\n**调试信息:** 规则详情:\n"
+                    for i, rule in enumerate(rules):
+                        error_msg += f"- 规则 {i+1} ({rule.get('name')}): periods={rule.get('periods', [])}\n"
+                st.error(error_msg)
             else:
                 # 重新生成配置以确保是最新的
-                yaml_data = build_yaml_config(selected_ids, id_to_name, rules, timezone)
-                if not yaml_data or len(yaml_data.strip()) == 0:
-                    st.error("⚠️ 配置生成失败，请检查设置。")
-                else:
-                    # 保存配置并发送到服务器
-                    st.session_state["yaml_data"] = yaml_data
-                    try:
-                        r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
-                        if r.status_code == 200:
-                            st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
-                        else:
-                            st.error(f"保存失败: {r.status_code} {r.text}")
-                    except Exception as e:
-                        st.error(f"保存时发生错误: {str(e)}")
+                try:
+                    yaml_data = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+                    if not yaml_data or len(yaml_data.strip()) == 0:
+                        error_msg = "⚠️ 配置生成失败，请检查设置。"
+                        if show_save_debug:
+                            error_msg += f"\n\n**调试信息:** yaml_data 为空或无效"
+                        st.error(error_msg)
+                    else:
+                        # 保存配置并发送到服务器
+                        st.session_state["yaml_data"] = yaml_data
+                        if show_save_debug:
+                            st.info(f"✅ 配置已生成，长度: {len(yaml_data)} 字符")
+                        
+                        try:
+                            if show_save_debug:
+                                st.write(f"**发送请求到:** {API_BASE}/config/save")
+                                st.write(f"**Headers:** {HEADERS}")
+                                st.write(f"**数据长度:** {len(yaml_data.encode('utf-8'))} 字节")
+                            
+                            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"), timeout=10)
+                            
+                            if show_save_debug:
+                                st.write(f"**响应状态码:** {r.status_code}")
+                                st.write(f"**响应内容:** {r.text[:500]}")
+                            
+                            if r.status_code == 200:
+                                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+                            else:
+                                error_msg = f"⚠️ 保存失败: HTTP {r.status_code}"
+                                error_msg += f"\n\n**后端返回:** {r.text}"
+                                if show_save_debug:
+                                    error_msg += f"\n\n**请求URL:** {API_BASE}/config/save"
+                                    error_msg += f"\n**请求Headers:** {HEADERS}"
+                                st.error(error_msg)
+                        except requests.exceptions.ConnectionError as e:
+                            error_msg = f"⚠️ 无法连接到服务器: {str(e)}"
+                            if show_save_debug:
+                                error_msg += f"\n\n**服务器地址:** {API_BASE}"
+                            st.error(error_msg)
+                        except requests.exceptions.Timeout as e:
+                            error_msg = f"⚠️ 请求超时: {str(e)}"
+                            st.error(error_msg)
+                        except Exception as e:
+                            error_msg = f"⚠️ 保存时发生错误: {str(e)}"
+                            if show_save_debug:
+                                import traceback
+                                error_msg += f"\n\n**详细错误信息:**\n```\n{traceback.format_exc()}\n```"
+                            st.error(error_msg)
+                except Exception as e:
+                    error_msg = f"⚠️ 配置生成时发生错误: {str(e)}"
+                    if show_save_debug:
+                        import traceback
+                        error_msg += f"\n\n**详细错误信息:**\n```\n{traceback.format_exc()}\n```"
+                    st.error(error_msg)
     else:
         # 使用已生成的配置
+        if show_save_debug:
+            st.info(f"✅ 使用已生成的配置，长度: {len(yaml_data)} 字符")
+        
         try:
-            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"))
+            if show_save_debug:
+                st.write(f"**发送请求到:** {API_BASE}/config/save")
+                st.write(f"**Headers:** {HEADERS}")
+                st.write(f"**数据长度:** {len(yaml_data.encode('utf-8'))} 字节")
+            
+            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"), timeout=10)
+            
+            if show_save_debug:
+                st.write(f"**响应状态码:** {r.status_code}")
+                st.write(f"**响应内容:** {r.text[:500]}")
+            
             if r.status_code == 200:
                 st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
             else:
-                st.error(f"保存失败: {r.status_code} {r.text}")
+                error_msg = f"⚠️ 保存失败: HTTP {r.status_code}"
+                error_msg += f"\n\n**后端返回:** {r.text}"
+                if show_save_debug:
+                    error_msg += f"\n\n**请求URL:** {API_BASE}/config/save"
+                    error_msg += f"\n**请求Headers:** {HEADERS}"
+                st.error(error_msg)
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"⚠️ 无法连接到服务器: {str(e)}"
+            if show_save_debug:
+                error_msg += f"\n\n**服务器地址:** {API_BASE}"
+            st.error(error_msg)
+        except requests.exceptions.Timeout as e:
+            error_msg = f"⚠️ 请求超时: {str(e)}"
+            st.error(error_msg)
         except Exception as e:
-            st.error(f"保存时发生错误: {str(e)}")
+            error_msg = f"⚠️ 保存时发生错误: {str(e)}"
+            if show_save_debug:
+                import traceback
+                error_msg += f"\n\n**详细错误信息:**\n```\n{traceback.format_exc()}\n```"
+            st.error(error_msg)
 
 # 立即执行一次（按当前时间立即执行一次）
 st.markdown("### ⏱ 立即执行一次（测试用）")
