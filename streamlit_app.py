@@ -40,47 +40,115 @@ def get_token_from_env_or_secrets() -> str:
         token = os.environ.get("WB_PROMO_TOKEN", "")
     return token
 
-def wb_get_auction_adverts(token: str, statuses: str = "4,7,8,9,11") -> List[Dict]:
+def wb_get_auction_adverts(token: str, statuses: str = "4,7,8,9,11", raw_data=None) -> List[Dict]:
     """
-    读取“自定义/统一（类型9）”活动信息，包括名称。
+    读取"自定义/统一（类型9）"活动信息，包括名称。
     GET /adv/v0/auction/adverts
+    
+    WB API可能返回扁平化数组格式，每个元素只包含一个字段（id, settings, status等）
+    需要将这些字段合并到同一个广告对象中。
     """
-    url = f"{WB_API_BASE}/adv/v0/auction/adverts"
-    headers = {"Authorization": token}
-    params = {"statuses": statuses}
-    r = requests.get(url, headers=headers, params=params, timeout=20)
-    if r.status_code != 200:
-        raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
-    data = r.json()
+    if raw_data is None:
+        url = f"{WB_API_BASE}/adv/v0/auction/adverts"
+        headers = {"Authorization": token}
+        params = {"statuses": statuses}
+        r = requests.get(url, headers=headers, params=params, timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
+        data = r.json()
+    else:
+        data = raw_data
+    
     adverts = []
-    # 接口返回是一个 list-like 的“对象数组”；不同字段拆分存放，这里做轻度规范化
-    # 收敛到 [{id, name, payment_type, status, placements, nm_settings[]}, ...]
-    current = {"id": None, "name": None, "payment_type": None, "status": None, "placements": None, "nm_settings": []}
-    accum = []
-    if isinstance(data, dict) and "adverts" in data:
-        items = data["adverts"]
+    
+    # 处理不同的API返回格式
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("adverts", data.get("data", []))
+        if not items and "id" in data:
+            # 单个对象
+            items = [data]
     else:
         items = []
-    for it in items:
-        if "id" in it:
-            if current["id"] is not None:
-                accum.append(current)
-            current = {"id": it["id"], "name": None, "payment_type": None, "status": None, "placements": None, "nm_settings": []}
-        elif "settings" in it:
-            s = it["settings"]
-            current["name"] = s.get("name")
-            current["payment_type"] = s.get("payment_type")
-            current["placements"] = s.get("placements")
-        elif "status" in it:
-            current["status"] = it.get("status")
-        elif "nm_settings" in it:
-            current["nm_settings"] = it.get("nm_settings") or []
-        elif "timestamps" in it or "bid_type" in it:
-            # 忽略
-            pass
-    if current["id"] is not None:
-        accum.append(current)
-    return accum
+    
+    # WB API可能返回扁平化数组，需要按ID分组
+    adverts_dict = {}
+    
+    for item in items:
+        # 如果item包含id字段，这是一个新广告的开始
+        if "id" in item:
+            adv_id = item["id"]
+            if adv_id not in adverts_dict:
+                adverts_dict[adv_id] = {
+                    "id": adv_id,
+                    "name": None,
+                    "payment_type": None,
+                    "status": None,
+                    "placements": None,
+                    "nm_settings": []
+                }
+        
+        # 处理settings字段（包含name等信息）
+        if "settings" in item:
+            settings = item["settings"]
+            if isinstance(settings, dict):
+                # 找到对应的广告ID
+                if "id" in item:
+                    adv_id = item["id"]
+                else:
+                    # 如果没有id，尝试从settings中找
+                    adv_id = settings.get("id") or settings.get("advertId")
+                
+                if adv_id and adv_id in adverts_dict:
+                    adverts_dict[adv_id]["name"] = settings.get("name") or settings.get("advertName")
+                    adverts_dict[adv_id]["payment_type"] = settings.get("payment_type")
+                    adverts_dict[adv_id]["placements"] = settings.get("placements")
+        
+        # 处理status字段
+        if "status" in item:
+            if "id" in item:
+                adv_id = item["id"]
+                if adv_id in adverts_dict:
+                    adverts_dict[adv_id]["status"] = item["status"]
+        
+        # 处理nm_settings
+        if "nm_settings" in item:
+            if "id" in item:
+                adv_id = item["id"]
+                if adv_id in adverts_dict:
+                    adverts_dict[adv_id]["nm_settings"] = item.get("nm_settings", [])
+    
+    # 如果上面的逻辑没有工作，尝试直接解析完整对象
+    if not adverts_dict and items:
+        for item in items:
+            # 尝试作为完整对象解析
+            if isinstance(item, dict):
+                advert = {
+                    "id": item.get("id") or item.get("advertId"),
+                    "name": item.get("name") or item.get("advertName") or item.get("title"),
+                    "payment_type": item.get("payment_type"),
+                    "status": item.get("status"),
+                    "placements": item.get("placements"),
+                    "nm_settings": item.get("nm_settings", [])
+                }
+                
+                # 如果settings是嵌套的
+                if "settings" in item and isinstance(item["settings"], dict):
+                    s = item["settings"]
+                    if not advert["name"]:
+                        advert["name"] = s.get("name") or s.get("advertName")
+                    if not advert["payment_type"]:
+                        advert["payment_type"] = s.get("payment_type")
+                    if not advert["placements"]:
+                        advert["placements"] = s.get("placements")
+                
+                if advert["id"] is not None:
+                    adverts_dict[advert["id"]] = advert
+    
+    # 转换为列表
+    adverts = list(adverts_dict.values())
+    return adverts
 
 def wb_start(token: str, advert_id: int) -> str:
     r = requests.get(f"{WB_API_BASE}/adv/v0/start", headers={"Authorization": token}, params={"id": advert_id}, timeout=20)
@@ -184,13 +252,42 @@ if not token:
 # 加载广告活动
 left, right = st.columns([1, 2])
 with left:
+    show_debug = st.checkbox("显示调试信息", value=False, help="查看API原始返回数据")
     if st.button("🔄 加载广告活动（类型9，自定义/统一）", use_container_width=True, disabled=not token):
         try:
-            adverts = wb_get_auction_adverts(token)
+            # 先获取原始数据用于调试
+            url = f"{WB_API_BASE}/adv/v0/auction/adverts"
+            headers = {"Authorization": token}
+            params = {"statuses": "4,7,8,9,11"}
+            r = requests.get(url, headers=headers, params=params, timeout=20)
+            if r.status_code != 200:
+                raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
+            raw_data = r.json()
+            
+            # 显示调试信息
+            if show_debug:
+                with st.expander("🔍 API原始数据（调试）", expanded=True):
+                    st.json(raw_data)
+                    # 显示数据结构信息
+                    if isinstance(raw_data, list) and len(raw_data) > 0:
+                        st.info(f"数据类型: 列表，包含 {len(raw_data)} 个元素")
+                        st.json(raw_data[0] if len(raw_data) > 0 else {})
+                    elif isinstance(raw_data, dict):
+                        st.info(f"数据类型: 字典，键: {list(raw_data.keys())}")
+            
+            adverts = wb_get_auction_adverts(token, raw_data=raw_data)
             st.session_state["adverts"] = adverts
+            st.session_state["raw_data"] = raw_data  # 保存原始数据
             st.success(f"加载到 {len(adverts)} 条活动")
+            
+            # 显示解析统计
+            with_names = sum(1 for a in adverts if a.get("name"))
+            st.info(f"其中 {with_names} 条包含名称信息")
         except Exception as e:
             st.error(f"加载失败：{e}")
+            import traceback
+            if show_debug:
+                st.code(traceback.format_exc())
 
 # 展示广告列表并选择
 adverts = st.session_state.get("adverts", [])
