@@ -402,6 +402,10 @@ with col_add:
 with col_clear:
     if st.button("🗑️ 清空所有规则", use_container_width=True):
         st.session_state["rules"] = []
+        # 清理所有相关的session_state键
+        keys_to_remove = [k for k in st.session_state.keys() if k.startswith("n_periods_")]
+        for k in keys_to_remove:
+            del st.session_state[k]
 
 # 显示和编辑规则
 rules = st.session_state.get("rules", [])
@@ -431,14 +435,27 @@ for rule_idx, rule in enumerate(rules):
         
         # 时间段设置
         st.markdown("**时间段设置**")
+        # 获取当前时间段数量，确保至少为1
+        current_periods_count = len(rule.get("periods", []))
+        if current_periods_count == 0:
+            current_periods_count = 1
+        
+        # 从session_state获取或使用默认值
         if f"n_periods_{rule_idx}" not in st.session_state:
-            st.session_state[f"n_periods_{rule_idx}"] = len(rule.get("periods", [1]))
+            st.session_state[f"n_periods_{rule_idx}"] = current_periods_count
+        else:
+            # 确保值在有效范围内
+            stored_value = st.session_state[f"n_periods_{rule_idx}"]
+            if stored_value < 1:
+                st.session_state[f"n_periods_{rule_idx}"] = 1
+            elif stored_value > 10:
+                st.session_state[f"n_periods_{rule_idx}"] = 10
         
         n_periods = st.number_input(
             "时间段数量", 
             min_value=1, 
             max_value=10, 
-            value=st.session_state[f"n_periods_{rule_idx}"],
+            value=max(1, min(10, st.session_state[f"n_periods_{rule_idx}"])),
             step=1,
             key=f"n_periods_input_{rule_idx}"
         )
@@ -484,6 +501,10 @@ for rule_idx, rule in enumerate(rules):
         # 删除规则按钮
         if st.button("🗑️ 删除此规则", key=f"delete_rule_{rule_idx}", use_container_width=True):
             st.session_state["rules"].pop(rule_idx)
+            # 清理该规则相关的session_state键
+            key_to_remove = f"n_periods_{rule_idx}"
+            if key_to_remove in st.session_state:
+                del st.session_state[key_to_remove]
             st.rerun()
 
 st.markdown("---")
