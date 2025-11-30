@@ -22,6 +22,31 @@ import requests
 import streamlit as st
 import yaml
 
+yaml_text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+st.session_state["yaml_data"] = yaml_text   # ← 关键：把文本放进会话状态
+st.code(yaml_text, language="yaml")
+import requests, os
+
+API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
+HEADERS = {}
+if os.environ.get("API_GATEWAY_TOKEN"):
+    HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
+
+if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
+    data = st.session_state.get("yaml_data", "")
+    if not data:
+        st.error("⚠️ 当前没有生成配置，请先在上方选择广告 + 规则。")
+    else:
+        try:
+            r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=data.encode("utf-8"))
+            if r.status_code == 200:
+                st.success("✅ 配置已保存到服务器！系统将在下个轮询周期自动生效。")
+            else:
+                st.error(f"保存失败：{r.status_code} {r.text}")
+        except Exception as e:
+            st.error(str(e))
+
+
 WB_API_BASE = "https://advert-api.wildberries.ru"
 
 STATUS_LABELS = {
