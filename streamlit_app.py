@@ -95,11 +95,11 @@ def wb_stop(token: str, advert_id: int) -> str:
     return f"{r.status_code} {r.text}"
 
 def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], weekdays: List[int], periods: List[dict], timezone: str) -> str:
-    # 构建广告ID到名称的映射注释
-    adverts_info = []
+    # 构建广告ID到名称的映射信息
+    adverts_info = {}
     for adv_id in selected_ids:
         name = id_to_name.get(adv_id, "未命名")
-        adverts_info.append(f"  # {name} (ID: {adv_id})")
+        adverts_info[adv_id] = name
     
     cfg = {
         "timezone": timezone,
@@ -112,7 +112,11 @@ def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], weekd
         "rules": [
             {
                 "name": "可视化创建的规则",
-                "targets": {"type": "ids", "ids": selected_ids},
+                "targets": {
+                    "type": "ids", 
+                    "ids": selected_ids,
+                    "adverts": adverts_info  # 广告ID到名称的映射
+                },
                 "weekdays": weekdays,
                 "periods": periods,  # [{"start":"08:00","end":"18:00","action":"start"}, ...]
                 "exclude_dates": [],
@@ -122,13 +126,20 @@ def build_yaml_config(selected_ids: List[int], id_to_name: Dict[int, str], weekd
         ],
     }
     yaml_str = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-    # 在targets部分添加广告名称注释
+    # 在ids行后添加注释，显示每个ID对应的名称
     if adverts_info:
         lines = yaml_str.split('\n')
         for i, line in enumerate(lines):
             if 'ids:' in line:
+                # 找到ids行的缩进
+                indent = len(line) - len(line.lstrip())
+                # 添加注释行
+                comment_lines = []
+                for adv_id in selected_ids:
+                    name = adverts_info.get(adv_id, "未命名")
+                    comment_lines.append(' ' * indent + f"# {name} (ID: {adv_id})")
                 # 在ids行后插入注释
-                lines.insert(i + 1, '\n'.join(adverts_info))
+                lines.insert(i + 1, '\n'.join(comment_lines))
                 break
         yaml_str = '\n'.join(lines)
     return yaml_str
@@ -203,6 +214,15 @@ if adverts:
     selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
     selected_ids = [options[k] for k in selected_labels]
     st.session_state["id_to_name"] = id_to_name
+    
+    # 显示已选择的广告信息
+    if selected_ids:
+        st.info(f"已选择 {len(selected_ids)} 个广告活动：")
+        selected_info = []
+        for adv_id in selected_ids:
+            name = id_to_name.get(adv_id, "未命名")
+            selected_info.append(f"• {name} (ID: {adv_id})")
+        st.markdown("\n".join(selected_info))
 else:
     selected_ids = []
     st.session_state["id_to_name"] = {}
@@ -280,5 +300,9 @@ if st.button("执行（对所选广告按当前时刻决定 start/pause/stop）"
         # 以表格形式显示结果
         import pandas as pd
         results_df = pd.DataFrame(results)
-        st.dataframe(results_df)
+        # 重新排列列的顺序，让名称更显眼
+        if not results_df.empty:
+            results_df = results_df[["name", "id", "action", "result"]]
+            results_df.columns = ["广告名称", "广告ID", "执行动作", "执行结果"]
+        st.dataframe(results_df, use_container_width=True)
         st.json({"results": results})
