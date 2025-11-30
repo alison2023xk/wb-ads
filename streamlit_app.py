@@ -366,6 +366,7 @@ if adverts:
     selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
     selected_ids = [options[k] for k in selected_labels]
     st.session_state["id_to_name"] = id_to_name
+    st.session_state["selected_ids"] = selected_ids  # 保存到 session_state
     
     # 显示已选择的广告信息
     if selected_ids:
@@ -378,6 +379,7 @@ if adverts:
 else:
     selected_ids = []
     st.session_state["id_to_name"] = {}
+    st.session_state["selected_ids"] = []  # 保存到 session_state
 
 st.markdown("---")
 
@@ -386,6 +388,7 @@ st.subheader("规则设置")
 
 # 时区设置
 timezone = st.selectbox("时区（用于时间计算）", ["Europe/Moscow","Europe/Berlin","Asia/Shanghai","UTC"], index=0)
+st.session_state["timezone"] = timezone  # 保存到 session_state
 
 # 规则管理
 st.markdown("#### 📋 添加多个规则")
@@ -426,6 +429,7 @@ with col_clear:
 
 # 显示和编辑规则
 rules = st.session_state.get("rules", [])
+st.session_state["rules"] = rules  # 确保保存到 session_state
 if not rules:
     st.info("👆 点击「添加新规则」开始配置")
 
@@ -571,12 +575,18 @@ for rule_idx, rule in enumerate(rules):
                 except KeyError:
                     pass
             st.rerun()
+    
+    # 更新 session_state 中的规则（在循环结束后）
+    st.session_state["rules"] = rules
 
 st.markdown("---")
 
 # 生成 YAML
-disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
+# 从 session_state 获取最新值，确保作用域正确
+selected_ids = st.session_state.get("selected_ids", [])
+rules = st.session_state.get("rules", [])
 id_to_name = st.session_state.get("id_to_name", {})
+disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
 
 # 只有在有选中广告和规则时才生成配置
 if not disabled_generate:
@@ -628,6 +638,12 @@ if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
+    # 从 session_state 获取最新值
+    selected_ids = st.session_state.get("selected_ids", [])
+    rules = st.session_state.get("rules", [])
+    id_to_name = st.session_state.get("id_to_name", {})
+    timezone = st.session_state.get("timezone", "Europe/Moscow")
+    
     # 检查是否有选中的广告和规则
     if len(selected_ids) == 0:
         st.error("⚠️ 请先选择要控制的广告活动。")
