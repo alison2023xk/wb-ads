@@ -1,0 +1,252 @@
+# streamlit_app.py
+# -*- coding: utf-8 -*-
+"""
+可视化：WB 广告定时规则编辑器（Streamlit）
+- 读取卖家广告活动列表（名称 + ID）
+- 选择广告、设置星期与时间段、动作
+- 一键导出 YAML 配置，兼容 wb_ad_auto_scheduler.py
+- 可选：立即执行“当前时刻”的开/停/停用（Run once）
+
+部署：
+1) 将此仓库推到 GitHub
+2) 在 Streamlit Cloud 选择此仓库部署
+3) 在 App Secrets 中添加：
+   WB_PROMO_TOKEN = "你的 Promotion 类 API Token"
+"""
+import os
+import time
+from datetime import datetime, time as dtime
+from typing import List, Dict
+
+import requests
+import streamlit as st
+import yaml
+
+WB_API_BASE = "https://advert-api.wildberries.ru"
+
+STATUS_LABELS = {
+    -1: "deleted",
+    4: "ready",
+    7: "completed",
+    8: "declined",
+    9: "active",
+    11: "paused",
+}
+
+def get_token_from_env_or_secrets() -> str:
+    # 优先 Streamlit Secrets，其次环境变量
+    token = st.secrets.get("WB_PROMO_TOKEN", "")
+    if not token:
+        token = os.environ.get("WB_PROMO_TOKEN", "")
+    return token
+
+def wb_get_auction_adverts(token: str, statuses: str = "4,7,8,9,11") -> List[Dict]:
+    """
+    读取“自定义/统一（类型9）”活动信息，包括名称。
+    GET /adv/v0/auction/adverts
+    """
+    url = f"{WB_API_BASE}/adv/v0/auction/adverts"
+    headers = {"Authorization": token}
+    params = {"statuses": statuses}
+    r = requests.get(url, headers=headers, params=params, timeout=20)
+    if r.status_code != 200:
+        raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
+    data = r.json()
+    adverts = []
+    # 接口返回是一个 list-like 的“对象数组”；不同字段拆分存放，这里做轻度规范化
+    # 收敛到 [{id, name, payment_type, status, placements, nm_settings[]}, ...]
+    current = {"id": None, "name": None, "payment_type": None, "status": None, "placements": None, "nm_settings": []}
+    accum = []
+    if isinstance(data, dict) and "adverts" in data:
+        items = data["adverts"]
+    else:
+        items = []
+    for it in items:
+        if "id" in it:
+            if current["id"] is not None:
+                accum.append(current)
+            current = {"id": it["id"], "name": None, "payment_type": None, "status": None, "placements": None, "nm_settings": []}
+        elif "settings" in it:
+            s = it["settings"]
+            current["name"] = s.get("name")
+            current["payment_type"] = s.get("payment_type")
+            current["placements"] = s.get("placements")
+        elif "status" in it:
+            current["status"] = it.get("status")
+        elif "nm_settings" in it:
+            current["nm_settings"] = it.get("nm_settings") or []
+        elif "timestamps" in it or "bid_type" in it:
+            # 忽略
+            pass
+    if current["id"] is not None:
+        accum.append(current)
+    return accum
+
+def wb_start(token: str, advert_id: int) -> str:
+    r = requests.get(f"{WB_API_BASE}/adv/v0/start", headers={"Authorization": token}, params={"id": advert_id}, timeout=20)
+    return f"{r.status_code} {r.text}"
+
+def wb_pause(token: str, advert_id: int) -> str:
+    r = requests.get(f"{WB_API_BASE}/adv/v0/pause", headers={"Authorization": token}, params={"id": advert_id}, timeout=20)
+    return f"{r.status_code} {r.text}"
+
+def wb_stop(token: str, advert_id: int) -> str:
+    r = requests.get(f"{WB_API_BASE}/adv/v0/stop", headers={"Authorization": token}, params={"id": advert_id}, timeout=20)
+    return f"{r.status_code} {r.text}"
+
+def build_yaml_config(selected_ids: List[int], weekdays: List[int], periods: List[dict], timezone: str) -> str:
+    cfg = {
+        "timezone": timezone,
+        "msk_timezone": "Europe/Moscow",
+        "rate_limit": {"per_second": 4, "burst": 4},
+        "wb": {
+            "api_base": WB_API_BASE,
+            "token_env": "WB_PROMO_TOKEN",
+        },
+        "rules": [
+            {
+                "name": "可视化创建的规则",
+                "targets": {"type": "ids", "ids": selected_ids},
+                "weekdays": weekdays,
+                "periods": periods,  # [{"start":"08:00","end":"18:00","action":"start"}, ...]
+                "exclude_dates": [],
+                "priority": 100,
+                "enabled": True,
+            }
+        ],
+    }
+    return yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
+
+def in_period(now_t: dtime, start_t: dtime, end_t: dtime) -> bool:
+    if start_t <= end_t:
+        return start_t <= now_t < end_t
+    return (now_t >= start_t) or (now_t < end_t)  # 跨天
+
+def decide_now_action(now: dtime, weekdays: List[int], periods: List[dict]) -> str | None:
+    import datetime as _dt
+    wd = (datetime.now().weekday() + 1)  # 1..7
+    if wd not in weekdays:
+        return None
+    # 简化：多条period命中时，按列表先后为准
+    for p in periods:
+        st = _dt.time.fromisoformat(p["start"])
+        et = _dt.time.fromisoformat(p["end"])
+        if in_period(now, st, et):
+            return p["action"]
+    return None
+
+# ---------------- UI ----------------
+st.set_page_config(page_title="WB 广告定时规则编辑器", page_icon="⏰", layout="wide")
+
+st.title("⏰ WB 广告定时规则编辑器（Streamlit）")
+with st.expander("使用说明", expanded=False):
+    st.markdown("""
+- 左侧/下方填写 Token 或在 Secrets 添加 `WB_PROMO_TOKEN`
+- 点击“加载广告活动”获取你的活动列表
+- 选择广告 + 勾选星期 + 添加时间段，生成 YAML
+- 下载配置：用于 `wb_ad_auto_scheduler.py`
+- 可选：点击【Run once】立即对当前时刻执行一次开/关（不带循环定时）
+""")
+
+# Token 输入
+token_default = get_token_from_env_or_secrets()
+token = st.text_input("Promotion API Token（若已在 Secrets 可留空）", value=token_default, type="password")
+if not token:
+    st.warning("未提供 Token。加载活动与执行操作将不可用。")
+
+# 加载广告活动
+left, right = st.columns([1, 2])
+with left:
+    if st.button("🔄 加载广告活动（类型9，自定义/统一）", use_container_width=True, disabled=not token):
+        try:
+            adverts = wb_get_auction_adverts(token)
+            st.session_state["adverts"] = adverts
+            st.success(f"加载到 {len(adverts)} 条活动")
+        except Exception as e:
+            st.error(f"加载失败：{e}")
+
+# 展示广告列表并选择
+adverts = st.session_state.get("adverts", [])
+if adverts:
+    import pandas as pd
+    df = []
+    for a in adverts:
+        df.append({
+            "ID": a["id"],
+            "名称": a.get("name"),
+            "状态": STATUS_LABELS.get(a.get("status"), a.get("status")),
+            "付费": a.get("payment_type"),
+            "placements": (a.get("placements") or {}),
+        })
+    st.dataframe(pd.DataFrame(df))
+
+    # 选择广告（按名称显示，值为 id）
+    options = {f'{row["名称"] or "未命名"} (#{row["ID"]})': row["ID"] for row in df}
+    selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
+    selected_ids = [options[k] for k in selected_labels]
+else:
+    selected_ids = []
+
+st.markdown("---")
+
+# 规则编辑
+st.subheader("规则设置")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    timezone = st.selectbox("时区（用于时间计算）", ["Europe/Moscow","Europe/Berlin","Asia/Shanghai","UTC"], index=0)
+
+with col2:
+    weekdays_map = {"周一":1,"周二":2,"周三":3,"周四":4,"周五":5,"周六":6,"周日":7}
+    weekdays_labels = st.multiselect("星期（1=周一…7=周日）", list(weekdays_map.keys()), default=list(weekdays_map.keys()))
+    weekdays = [weekdays_map[k] for k in weekdays_labels]
+
+with col3:
+    n_periods = st.number_input("时间段数量", min_value=1, max_value=10, value=2, step=1)
+
+periods = []
+for i in range(n_periods):
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        st.markdown(f"**时间段 {i+1}**")
+    with c2:
+        start_time = st.time_input(f"开始时间 {i+1}", value=dtime(9,0), key=f"start_{i}")
+    with c3:
+        end_time = st.time_input(f"结束时间 {i+1}", value=dtime(18,0), key=f"end_{i}")
+    action = st.selectbox(f"动作 {i+1}", ["start","pause","stop"], key=f"act_{i}")
+    periods.append({"start": start_time.strftime("%H:%M"), "end": end_time.strftime("%H:%M"), "action": action})
+
+st.markdown("---")
+
+# 生成 YAML
+disabled_generate = (len(selected_ids) == 0)
+yaml_str = build_yaml_config(selected_ids, weekdays, periods, timezone)
+st.code(yaml_str, language="yaml")
+
+st.download_button(
+    "⬇️ 下载 YAML 配置（wb_scheduler.config.yaml）",
+    data=yaml_str.encode("utf-8"),
+    file_name="wb_scheduler.config.yaml",
+    mime="text/yaml",
+    disabled=disabled_generate
+)
+
+# Run once（按当前时间立即执行一次）
+st.markdown("### ⏱ Run once（当前时刻执行一次）")
+if st.button("执行（对所选广告按当前时刻决定 start/pause/stop）", disabled=(not token or disabled_generate)):
+    now = datetime.now().time()
+    act = decide_now_action(now, weekdays, periods)
+    if not act:
+        st.info("当前时刻未命中任何时间段，不执行。")
+    else:
+        results = []
+        for adv_id in selected_ids:
+            if act == "start":
+                res = wb_start(token, adv_id)
+            elif act == "pause":
+                res = wb_pause(token, adv_id)
+            else:
+                res = wb_stop(token, adv_id)
+            results.append((adv_id, act, res))
+        st.success("执行完成")
+        st.json({"results": results})
