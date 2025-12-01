@@ -678,24 +678,52 @@ def page_smartbid_overview():
         st.error("智能出价模块不可用，请检查WB_SmartBid目录")
         return
     
+    # Token配置区域
+    with st.expander("⚙️ API Token 配置", expanded=True):
+        # 尝试从session_state或环境变量获取Token
+        default_token = st.session_state.get("smartbid_token", "")
+        if not default_token:
+            default_token = get_token_from_env_or_secrets()
+        
+        token = st.text_input(
+            "WB API Token",
+            value=default_token,
+            type="password",
+            help="用于访问WB广告API的Token。可以在这里输入，或通过环境变量/Secrets配置。",
+            key="smartbid_token_input"
+        )
+        
+        if token:
+            # 保存到session_state
+            st.session_state["smartbid_token"] = token
+            st.success("✅ Token已配置")
+        else:
+            st.warning("⚠️ 请配置WB API Token以使用数据采集功能")
+            st.info("💡 Token可以从环境变量 `WB_API_TOKEN` 或 Streamlit Secrets 中读取")
+    
+    st.markdown("---")
+    
     df = load_campaigns_data()
     
     if df.empty:
         st.warning("暂无广告数据，请先执行数据采集")
-        if st.button("🔄 立即采集数据"):
-            token = get_token_from_env_or_secrets()
+        if st.button("🔄 立即采集数据", disabled=not token):
             if not token:
-                st.error("未配置WB API Token")
+                st.error("⚠️ 请先配置WB API Token")
                 return
             
             with st.spinner("正在采集数据..."):
                 try:
-                    fetcher = WBFetcher()
+                    # 使用提供的Token创建fetcher
+                    fetcher = WBFetcher(token=token)
                     df = fetcher.fetch_all_campaigns_data()
-                    st.success(f"成功采集 {len(df)} 条广告数据")
+                    st.success(f"✅ 成功采集 {len(df)} 条广告数据")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"采集失败: {e}")
+                    st.error(f"❌ 采集失败: {e}")
+                    import traceback
+                    with st.expander("🔍 详细错误信息", expanded=False):
+                        st.code(traceback.format_exc())
         return
     
     # 计算关键指标
@@ -779,6 +807,23 @@ def page_smartbid_strategy():
     if not SMARTBID_AVAILABLE:
         st.error("智能出价模块不可用")
         return
+    
+    # Token配置（如果需要）
+    token = st.session_state.get("smartbid_token", get_token_from_env_or_secrets())
+    if not token:
+        with st.expander("⚙️ API Token 配置", expanded=True):
+            token = st.text_input(
+                "WB API Token",
+                value="",
+                type="password",
+                help="用于访问WB广告API的Token",
+                key="smartbid_token_input_strategy"
+            )
+            if token:
+                st.session_state["smartbid_token"] = token
+                st.success("✅ Token已配置")
+            else:
+                st.warning("⚠️ 某些功能需要配置Token")
     
     if "smartbid_strategy_manager" not in st.session_state:
         st.session_state.smartbid_strategy_manager = StrategyManager()

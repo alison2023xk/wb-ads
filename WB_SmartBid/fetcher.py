@@ -52,8 +52,14 @@ class RateLimiter:
 class WBFetcher:
     """WB广告数据采集器"""
     
-    def __init__(self):
-        self.token = WB_API_TOKEN
+    def __init__(self, token: Optional[str] = None):
+        """
+        初始化采集器
+        
+        Args:
+            token: WB API Token，如果提供则使用，否则从环境变量读取
+        """
+        self.token = token or WB_API_TOKEN
         self.base_url = WB_API_URL.rstrip("/")
         self.rate_limiter = RateLimiter(RATE_LIMIT_PER_SECOND)
         self.session = requests.Session()
