@@ -518,24 +518,111 @@ def page_scheduler():
     # 保存到服务器
     st.markdown("---")
     st.markdown("#### 💾 保存配置到服务器")
+    
+    # 添加调试选项
+    show_save_debug = st.checkbox("🔍 显示保存调试信息", value=False, key="scheduler_show_save_debug", help="显示保存过程中的详细调试信息")
+    
+    # API配置
+    API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
+    HEADERS = {}
+    if os.environ.get("API_GATEWAY_TOKEN"):
+        HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
+    
+    # 显示当前API配置
+    with st.expander("⚙️ API配置信息", expanded=False):
+        st.write(f"**API地址:** `{API_BASE}/config/save`")
+        st.write(f"**认证方式:** {'Bearer Token' if HEADERS else '无认证'}")
+        st.info("💡 如果API端点不存在，请使用"下载配置文件"功能，然后手动上传到服务器")
+    
     if st.button("💾 保存到服务器"):
         yaml_data = st.session_state.get("scheduler_yaml_data", "")
         if not yaml_data or yaml_data.strip().startswith("# 请先"):
             st.error("请先生成有效配置")
         else:
-            API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
-            HEADERS = {}
-            if os.environ.get("API_GATEWAY_TOKEN"):
-                HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
+            if show_save_debug:
+                with st.expander("🔍 请求调试信息", expanded=True):
+                    st.write(f"**API地址:** {API_BASE}/config/save")
+                    st.write(f"**请求方法:** POST")
+                    st.write(f"**请求Headers:**")
+                    st.json(HEADERS if HEADERS else {})
+                    st.write(f"**数据长度:** {len(yaml_data.encode('utf-8'))} 字节")
+                    st.write(f"**数据预览（前300字符）:**")
+                    st.code(yaml_data[:300])
             
             try:
-                r = requests.post(f"{API_BASE}/config/save", headers=HEADERS, data=yaml_data.encode("utf-8"), timeout=10)
+                r = requests.post(
+                    f"{API_BASE}/config/save", 
+                    headers=HEADERS, 
+                    data=yaml_data.encode("utf-8"), 
+                    timeout=10
+                )
+                
+                if show_save_debug:
+                    with st.expander("🔍 响应调试信息", expanded=True):
+                        st.write(f"**状态码:** {r.status_code}")
+                        st.write(f"**响应头:**")
+                        st.json(dict(r.headers))
+                        st.write(f"**响应内容:**")
+                        st.code(r.text[:1000] if r.text else "(空)")
+                
                 if r.status_code == 200:
                     st.success("✅ 配置已保存到服务器！")
+                    st.info("💡 配置将在定时任务的下一个轮询周期自动生效")
+                elif r.status_code == 404:
+                    st.error("⚠️ 保存失败: HTTP 404 - API端点不存在")
+                    st.warning("""
+                    **问题分析：**
+                    - API端点 `{}/config/save` 返回404，说明该端点不存在或路径不正确
+                    
+                    **解决方案：**
+                    1. **使用下载功能（推荐）**：点击"下载YAML配置"按钮，下载配置文件后手动上传到服务器
+                    2. **检查API服务**：确认服务器上是否部署了对应的API服务
+                    3. **修改API地址**：如果API地址不同，请设置环境变量 `API_BASE`
+                    """.format(API_BASE))
+                    
+                    # 提供替代方案
+                    st.markdown("**替代方案：手动保存**")
+                    st.code(f"""
+# SSH登录服务器后执行：
+cat > /opt/adsctl-data/config.yaml << 'EOF'
+{yaml_data[:500]}...
+EOF
+                    """, language="bash")
+                elif r.status_code == 401:
+                    st.error("⚠️ 保存失败: HTTP 401 - 认证失败")
+                    st.info("请检查 `API_GATEWAY_TOKEN` 环境变量是否正确设置")
+                elif r.status_code == 403:
+                    st.error("⚠️ 保存失败: HTTP 403 - 权限不足")
+                    st.info("请检查Token是否有保存配置的权限")
                 else:
                     st.error(f"⚠️ 保存失败: HTTP {r.status_code}")
+                    st.write("**服务器响应：**")
+                    st.code(r.text[:500] if r.text else "(无响应内容)")
+                    
+            except requests.exceptions.ConnectionError as e:
+                st.error("⚠️ 无法连接到服务器")
+                st.info(f"""
+                **错误详情：** {str(e)}
+                
+                **可能的原因：**
+                1. 服务器 `{API_BASE}` 无法访问
+                2. 网络连接问题
+                3. 防火墙阻止了连接
+                
+                **建议：**
+                - 检查服务器是否运行：`ping 194.87.161.126`
+                - 检查API服务是否启动
+                - 使用"下载配置文件"功能作为替代方案
+                """)
+            except requests.exceptions.Timeout as e:
+                st.error("⚠️ 请求超时")
+                st.info("服务器响应时间过长，请稍后重试或使用下载功能")
             except Exception as e:
                 st.error(f"⚠️ 保存时发生错误: {e}")
+                if show_save_debug:
+                    import traceback
+                    with st.expander("详细错误信息"):
+                        st.code(traceback.format_exc())
     
     # 立即执行一次
     st.markdown("---")
