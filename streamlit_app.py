@@ -429,9 +429,11 @@ with col_clear:
 
 # 显示和编辑规则
 rules = st.session_state.get("rules", [])
-st.session_state["rules"] = rules  # 确保保存到 session_state
 if not rules:
     st.info("👆 点击「添加新规则」开始配置")
+
+# 创建规则列表的副本，避免直接修改引用
+rules = [dict(rule) for rule in rules] if rules else []
 
 for rule_idx, rule in enumerate(rules):
     with st.expander(f"📌 {rule.get('name', f'规则 {rule_idx + 1}')} {'✅' if rule.get('enabled', True) else '❌'}", expanded=True):
@@ -558,6 +560,14 @@ for rule_idx, rule in enumerate(rules):
         
         rule["periods"] = periods
         
+        # 立即更新 session_state 中的当前规则（确保修改实时保存）
+        if rule_idx < len(st.session_state.get("rules", [])):
+            st.session_state["rules"][rule_idx] = dict(rule)
+        else:
+            # 如果索引超出范围，说明是新规则，添加到列表
+            st.session_state["rules"] = st.session_state.get("rules", [])
+            st.session_state["rules"].append(dict(rule))
+        
         # 删除规则按钮
         if st.button("🗑️ 删除此规则", key=f"delete_rule_{rule_idx}", use_container_width=True):
             st.session_state["rules"].pop(rule_idx)
@@ -576,7 +586,7 @@ for rule_idx, rule in enumerate(rules):
                     pass
             st.rerun()
     
-    # 更新 session_state 中的规则（在循环结束后）
+    # 最终确保 session_state 中的规则列表是最新的
     st.session_state["rules"] = rules
 
 st.markdown("---")
@@ -638,8 +648,11 @@ HEADERS = {}
 if os.environ.get("API_GATEWAY_TOKEN"):
     HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
 
+st.markdown("---")
+st.markdown("#### 💾 保存配置到服务器")
+
 # 添加调试信息显示选项
-show_save_debug = st.checkbox("显示保存调试信息", value=False, key="show_save_debug", help="显示保存过程中的详细调试信息")
+show_save_debug = st.checkbox("🔍 显示保存调试信息", value=False, key="show_save_debug", help="显示保存过程中的详细调试信息")
 
 if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
     # 优先使用已生成的配置（如果存在且有效）
@@ -650,13 +663,22 @@ if st.button("💾 保存到服务器 (/opt/adsctl-data/config.yaml)"):
         with st.expander("🔍 保存调试信息", expanded=True):
             st.write("**Session State 状态:**")
             st.write(f"- selected_ids: {st.session_state.get('selected_ids', [])}")
+            st.write(f"- selected_ids 长度: {len(st.session_state.get('selected_ids', []))}")
             st.write(f"- rules 数量: {len(st.session_state.get('rules', []))}")
             st.write(f"- yaml_data 存在: {bool(yaml_data)}")
             st.write(f"- yaml_data 长度: {len(yaml_data) if yaml_data else 0}")
             st.write(f"- yaml_data 前100字符: {yaml_data[:100] if yaml_data else 'None'}")
             if st.session_state.get('rules'):
+                st.write("**规则详情:**")
                 for i, rule in enumerate(st.session_state.get('rules', [])):
-                    st.write(f"- 规则 {i+1}: name={rule.get('name')}, periods数量={len(rule.get('periods', []))}")
+                    periods_count = len(rule.get('periods', []))
+                    weekdays_count = len(rule.get('weekdays', []))
+                    enabled = rule.get('enabled', False)
+                    st.write(f"- 规则 {i+1}: name='{rule.get('name')}', enabled={enabled}, weekdays={weekdays_count}, periods={periods_count}")
+                    if periods_count == 0:
+                        st.warning(f"  ⚠️ 规则 {i+1} 没有配置时间段！")
+                    if weekdays_count == 0:
+                        st.warning(f"  ⚠️ 规则 {i+1} 没有选择星期几！")
     
     # 如果 session_state 中没有配置，或者配置只是提示信息，则重新生成
     if not yaml_data or yaml_data.strip().startswith("# 请先"):
