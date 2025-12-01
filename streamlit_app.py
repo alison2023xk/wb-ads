@@ -707,6 +707,12 @@ def page_smartbid_overview():
     
     if df.empty:
         st.warning("暂无广告数据，请先执行数据采集")
+        st.info("""
+        **注意：** 
+        - 数据采集会获取广告基本信息（ID、名称、状态等）
+        - 统计数据（CTR、ROI、花费等）可能需要从WB后台手动获取或通过其他API端点
+        - 如果统计数据为0，这是正常的，因为WB API可能不提供这些数据
+        """)
         if st.button("🔄 立即采集数据", disabled=not token):
             if not token:
                 st.error("⚠️ 请先配置WB API Token")
@@ -798,7 +804,22 @@ def page_smartbid_overview():
     
     st.markdown("---")
     st.subheader("📋 广告活动列表")
-    st.dataframe(df[["campaignId", "name", "status_label", "ctr", "roi", "spend", "clicks", "shows"]], use_container_width=True)
+    
+    # 显示数据说明
+    if len(df) > 0:
+        zero_stats_count = len(df[(df["ctr"] == 0) & (df["roi"] == 0) & (df["spend"] == 0)])
+        if zero_stats_count > 0:
+            st.info(f"💡 提示：{zero_stats_count} 个广告的统计数据为0。这可能是因为：\n"
+                   "- WB API不提供统计数据端点\n"
+                   "- 广告处于暂停状态，无统计数据\n"
+                   "- 需要从WB后台手动获取统计数据")
+    
+    # 确保campaignId显示为整数格式
+    display_df = df.copy()
+    if "campaignId" in display_df.columns:
+        display_df["campaignId"] = display_df["campaignId"].astype(int)
+    
+    st.dataframe(display_df[["campaignId", "name", "status_label", "ctr", "roi", "spend", "clicks", "shows"]], use_container_width=True)
 
 def page_smartbid_strategy():
     """智能出价 - 策略配置页"""

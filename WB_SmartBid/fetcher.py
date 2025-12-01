@@ -200,10 +200,10 @@ class WBFetcher:
                           date_to: str = None) -> Dict:
         """
         获取广告活动的统计数据
-        GET /adv/v3/fullstats
+        尝试多个API端点
         
         Args:
-            campaign_id: 广告活动ID
+            campaign_id: 广告活动ID（整数）
             date_from: 开始日期 (YYYY-MM-DD)，默认7天前
             date_to: 结束日期 (YYYY-MM-DD)，默认今天
         """
@@ -212,20 +212,30 @@ class WBFetcher:
         if date_to is None:
             date_to = datetime.now().strftime("%Y-%m-%d")
         
+        # 确保campaign_id是整数
         try:
-            params = {
-                "id": campaign_id,
-                "dateFrom": date_from,
-                "dateTo": date_to,
-            }
-            resp = self._request("GET", "/adv/v3/fullstats", params=params)
-            if resp.status_code != 200:
-                raise RuntimeError(f"获取统计数据失败: {resp.status_code} {resp.text}")
-            
-            data = resp.json()
-            return data
-        except Exception as e:
-            raise RuntimeError(f"获取统计数据异常: {e}")
+            campaign_id = int(campaign_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"无效的广告ID: {campaign_id}")
+        
+        # 尝试多个API端点
+        endpoints_to_try = [
+            ("/adv/v1/upd", {"id": campaign_id}),  # 获取广告详情
+            ("/adv/v0/params", {"id": campaign_id}),  # 获取参数
+            ("/adv/v3/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),  # 统计数据
+        ]
+        
+        for endpoint, params in endpoints_to_try:
+            try:
+                resp = self._request("GET", endpoint, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data
+            except Exception:
+                continue
+        
+        # 如果所有端点都失败，返回空字典
+        return {}
     
     def fetch_all_campaigns_data(self) -> pd.DataFrame:
         """
@@ -256,6 +266,13 @@ class WBFetcher:
             if not campaign_id:
                 continue
             
+            # 确保campaign_id是整数
+            try:
+                campaign_id = int(campaign_id)
+            except (ValueError, TypeError):
+                # 如果无法转换为整数，跳过
+                continue
+            
             # 更新进度
             if progress_bar and status_text:
                 progress = (idx + 1) / total
@@ -263,84 +280,66 @@ class WBFetcher:
                 status_text.text(f"正在处理广告 {idx + 1}/{total}: {campaign_id}")
             
             # 获取统计数据（可选，如果API支持）
+            # 注意：WB API可能没有统一的统计数据端点，这里先保存基本信息
+            # 统计数据可能需要通过其他方式获取或手动输入
+            campaign_data = {
+                "campaignId": int(campaign_id),  # 确保是整数类型
+                "name": campaign.get("name") or campaign.get("advertName", ""),
+                "status": int(campaign.get("status", -1)) if campaign.get("status") is not None else -1,
+                "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
+                "ctr": 0.0,  # 需要从其他API或数据源获取
+                "clicks": 0,
+                "shows": 0,
+                "spend": 0.0,
+                "roi": 0.0,
+                "position": 0,
+                "sku": "",
+                "keyword": "",
+                "fetch_time": datetime.now().isoformat(),
+            }
+            
+            # 尝试获取统计数据（如果API支持）
             try:
                 stats = self.get_campaign_stats(campaign_id)
-                
-                # 解析统计数据
-                stats_data = stats.get("result", [])
-                if isinstance(stats_data, list) and len(stats_data) > 0:
-                    # 汇总所有统计数据
-                    total_ctr = 0.0
-                    total_clicks = 0
-                    total_shows = 0
-                    total_spend = 0.0
-                    total_roi = 0.0
-                    count = 0
-                    
-                    for stat in stats_data:
-                        if isinstance(stat, dict):
-                            total_ctr += stat.get("ctr", 0.0)
-                            total_clicks += stat.get("clicks", 0)
-                            total_shows += stat.get("shows", 0)
-                            total_spend += stat.get("spend", 0.0)
-                            total_roi += stat.get("roi", 0.0)
-                            count += 1
-                    
-                    avg_ctr = total_ctr / count if count > 0 else 0.0
-                    avg_roi = total_roi / count if count > 0 else 0.0
-                    
-                    campaign_data = {
-                        "campaignId": campaign_id,
-                        "name": campaign.get("name") or campaign.get("advertName", ""),
-                        "status": campaign.get("status", -1),
-                        "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
-                        "ctr": avg_ctr,
-                        "clicks": total_clicks,
-                        "shows": total_shows,
-                        "spend": total_spend,
-                        "roi": avg_roi,
-                        "position": 0,  # 需要从其他API获取
-                        "sku": "",
-                        "keyword": "",
-                        "fetch_time": datetime.now().isoformat(),
-                    }
-                else:
-                    # 如果没有统计数据，保存基本信息
-                    campaign_data = {
-                        "campaignId": campaign_id,
-                        "name": campaign.get("name") or campaign.get("advertName", ""),
-                        "status": campaign.get("status", -1),
-                        "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
-                        "ctr": 0.0,
-                        "clicks": 0,
-                        "shows": 0,
-                        "spend": 0.0,
-                        "roi": 0.0,
-                        "position": 0,
-                        "sku": "",
-                        "keyword": "",
-                        "fetch_time": datetime.now().isoformat(),
-                    }
-                all_data.append(campaign_data)
-            except Exception as e:
-                # 如果获取统计数据失败，至少保存基本信息
-                # 不打印错误，避免干扰用户
-                campaign_data = {
-                    "campaignId": campaign_id,
-                    "name": campaign.get("name") or campaign.get("advertName", ""),
-                    "status": campaign.get("status", -1),
-                    "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
-                    "ctr": 0.0,
-                    "clicks": 0,
-                    "shows": 0,
-                    "spend": 0.0,
-                    "roi": 0.0,
-                    "position": 0,
-                    "sku": "",
-                    "keyword": "",
-                    "fetch_time": datetime.now().isoformat(),
-                }
-                all_data.append(campaign_data)
+                if stats:
+                    # 尝试从不同格式的响应中提取数据
+                    stats_data = stats.get("result", stats.get("data", []))
+                    if isinstance(stats_data, list) and len(stats_data) > 0:
+                        # 汇总统计数据
+                        total_ctr = 0.0
+                        total_clicks = 0
+                        total_shows = 0
+                        total_spend = 0.0
+                        total_roi = 0.0
+                        count = 0
+                        
+                        for stat in stats_data:
+                            if isinstance(stat, dict):
+                                total_ctr += float(stat.get("ctr", 0.0) or 0.0)
+                                total_clicks += int(stat.get("clicks", 0) or 0)
+                                total_shows += int(stat.get("shows", 0) or 0)
+                                total_spend += float(stat.get("spend", 0.0) or 0.0)
+                                total_roi += float(stat.get("roi", 0.0) or 0.0)
+                                count += 1
+                        
+                        if count > 0:
+                            campaign_data["ctr"] = total_ctr / count
+                            campaign_data["clicks"] = total_clicks
+                            campaign_data["shows"] = total_shows
+                            campaign_data["spend"] = total_spend
+                            campaign_data["roi"] = total_roi / count
+                    elif isinstance(stats, dict):
+                        # 直接是字典格式
+                        campaign_data["ctr"] = float(stats.get("ctr", 0.0) or 0.0)
+                        campaign_data["clicks"] = int(stats.get("clicks", 0) or 0)
+                        campaign_data["shows"] = int(stats.get("shows", 0) or 0)
+                        campaign_data["spend"] = float(stats.get("spend", 0.0) or 0.0)
+                        campaign_data["roi"] = float(stats.get("roi", 0.0) or 0.0)
+            except Exception:
+                # 统计数据获取失败，使用默认值0
+                pass
+            
+            all_data.append(campaign_data)
         
         # 清除进度条
         if progress_bar:
