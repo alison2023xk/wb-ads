@@ -49,7 +49,16 @@ mkdir -p $PROJECT_DIR/logs
 mkdir -p /etc/systemd/system
 
 echo ""
-echo "📦 步骤4: 创建systemd服务文件..."
+echo "📦 步骤4: 安装API服务器依赖..."
+pip3 install flask flask-cors
+
+echo ""
+echo "📦 步骤5: 创建必要目录..."
+mkdir -p /opt/adsctl-data/backups
+chown -R wb:wb /opt/adsctl-data 2>/dev/null || true
+
+echo ""
+echo "📦 步骤6: 创建systemd服务文件..."
 cat > /etc/systemd/system/wb-ads-streamlit.service << EOF
 [Unit]
 Description=WB广告管理系统 Streamlit服务
@@ -70,16 +79,52 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-echo "✅ 服务文件已创建: /etc/systemd/system/wb-ads-streamlit.service"
+echo "✅ Streamlit服务文件已创建"
+
+# 创建API服务器服务文件
+cat > /etc/systemd/system/wb-ads-api.service << EOF
+[Unit]
+Description=WB广告配置API服务
+After=network.target
+
+[Service]
+Type=simple
+User=wb
+WorkingDirectory=$PROJECT_DIR
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="CONFIG_SAVE_PATH=/opt/adsctl-data/config.yaml"
+Environment="CONFIG_BACKUP_DIR=/opt/adsctl-data/backups"
+Environment="API_PORT=5000"
+Environment="API_HOST=0.0.0.0"
+Environment="API_GATEWAY_TOKEN=${API_GATEWAY_TOKEN:-}"
+ExecStart=/usr/bin/python3 $PROJECT_DIR/api_server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "✅ API服务文件已创建: /etc/systemd/system/wb-ads-api.service"
 
 echo ""
-echo "📦 步骤5: 配置Nginx反向代理（可选）..."
+echo "📦 步骤7: 配置Nginx反向代理（可选）..."
 if command -v nginx &> /dev/null; then
     cat > /etc/nginx/sites-available/wb-ads << EOF
 server {
     listen 80;
     server_name 194.87.161.126;
 
+    # API端点
+    location /api/ {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Streamlit应用
     location / {
         proxy_pass http://127.0.0.1:$STREAMLIT_PORT;
         proxy_http_version 1.1;
@@ -108,29 +153,42 @@ else
 fi
 
 echo ""
-echo "📦 步骤6: 设置权限..."
+echo "📦 步骤8: 设置权限..."
 chown -R wb:wb $PROJECT_DIR
+chown -R wb:wb /opt/adsctl-data 2>/dev/null || true
 chmod +x $PROJECT_DIR/*.py 2>/dev/null || true
 
 echo ""
-echo "📦 步骤7: 启动服务..."
+echo "📦 步骤9: 启动服务..."
 systemctl daemon-reload
 systemctl enable wb-ads-streamlit.service
+systemctl enable wb-ads-api.service
 systemctl start wb-ads-streamlit.service
+systemctl start wb-ads-api.service
 
 echo ""
 echo "=========================================="
 echo "✅ 部署完成！"
 echo "=========================================="
 echo ""
-echo "服务状态: systemctl status wb-ads-streamlit"
-echo "查看日志: journalctl -u wb-ads-streamlit -f"
-echo "重启服务: systemctl restart wb-ads-streamlit"
+echo "Streamlit服务:"
+echo "  状态: systemctl status wb-ads-streamlit"
+echo "  日志: journalctl -u wb-ads-streamlit -f"
+echo "  重启: systemctl restart wb-ads-streamlit"
+echo ""
+echo "API服务:"
+echo "  状态: systemctl status wb-ads-api"
+echo "  日志: journalctl -u wb-ads-api -f"
+echo "  重启: systemctl restart wb-ads-api"
 echo ""
 if command -v nginx &> /dev/null; then
-    echo "访问地址: http://194.87.161.126"
+    echo "访问地址:"
+    echo "  Web界面: http://194.87.161.126"
+    echo "  API服务: http://194.87.161.126/api"
 else
-    echo "访问地址: http://194.87.161.126:$STREAMLIT_PORT"
+    echo "访问地址:"
+    echo "  Web界面: http://194.87.161.126:$STREAMLIT_PORT"
+    echo "  API服务: http://194.87.161.126:5000/api"
 fi
 echo ""
 

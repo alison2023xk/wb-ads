@@ -1,0 +1,21 @@
+[Unit]
+Description=WB广告配置API服务
+After=network.target
+
+[Service]
+Type=simple
+User=wb
+WorkingDirectory=/home/wb/wb-ads
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="CONFIG_SAVE_PATH=/opt/adsctl-data/config.yaml"
+Environment="CONFIG_BACKUP_DIR=/opt/adsctl-data/backups"
+Environment="API_PORT=5000"
+Environment="API_HOST=0.0.0.0"
+Environment="API_GATEWAY_TOKEN=你的Token（可选）"
+ExecStart=/usr/bin/python3 /home/wb/wb-ads/api_server.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

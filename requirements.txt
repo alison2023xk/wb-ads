@@ -2,3 +2,5 @@ streamlit==1.39.0
 requests>=2.31.0
 PyYAML>=6.0.1
 pandas>=2.2.0
+flask>=2.3.0
+flask-cors>=4.0.0
