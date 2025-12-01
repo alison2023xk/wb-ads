@@ -89,23 +89,110 @@ class WBFetcher:
     def get_campaigns_list(self) -> List[Dict]:
         """
         获取所有活跃广告活动列表
-        GET /adv/v2/list
+        使用 /adv/v0/auction/adverts 端点（与定时开关功能保持一致）
         """
         try:
-            resp = self._request("GET", "/adv/v2/list")
+            # 尝试使用 /adv/v0/auction/adverts 端点
+            params = {"statuses": "4,7,8,9,11"}  # ready, completed, declined, active, paused
+            resp = self._request("GET", "/adv/v0/auction/adverts", params=params)
+            
             if resp.status_code != 200:
-                raise RuntimeError(f"获取广告列表失败: {resp.status_code} {resp.text}")
+                # 如果失败，尝试备用端点
+                resp2 = self._request("GET", "/adv/v2/list")
+                if resp2.status_code == 200:
+                    data = resp2.json()
+                    if isinstance(data, dict):
+                        campaigns = data.get("result", data.get("data", []))
+                    elif isinstance(data, list):
+                        campaigns = data
+                    else:
+                        campaigns = []
+                    return campaigns
+                else:
+                    raise RuntimeError(f"获取广告列表失败: {resp.status_code} {resp.text}")
             
             data = resp.json()
-            # 处理不同的API返回格式
-            if isinstance(data, dict):
-                campaigns = data.get("result", data.get("data", []))
-            elif isinstance(data, list):
-                campaigns = data
-            else:
-                campaigns = []
             
-            return campaigns
+            # 处理 /adv/v0/auction/adverts 返回的扁平化数组格式
+            # 参考 streamlit_app.py 中的 wb_get_auction_adverts 函数
+            adverts = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("adverts", data.get("data", []))
+                if not items and "id" in data:
+                    items = [data]
+            else:
+                items = []
+            
+            # 按ID分组合并
+            adverts_dict = {}
+            for item in items:
+                if "id" in item:
+                    adv_id = item["id"]
+                    if adv_id not in adverts_dict:
+                        adverts_dict[adv_id] = {
+                            "id": adv_id,
+                            "name": None,
+                            "payment_type": None,
+                            "status": None,
+                            "placements": None,
+                            "nm_settings": []
+                        }
+                
+                if "settings" in item:
+                    settings = item["settings"]
+                    if isinstance(settings, dict):
+                        if "id" in item:
+                            adv_id = item["id"]
+                        else:
+                            adv_id = settings.get("id") or settings.get("advertId")
+                        
+                        if adv_id and adv_id in adverts_dict:
+                            adverts_dict[adv_id]["name"] = settings.get("name") or settings.get("advertName")
+                            adverts_dict[adv_id]["payment_type"] = settings.get("payment_type")
+                            adverts_dict[adv_id]["placements"] = settings.get("placements")
+                
+                if "status" in item:
+                    if "id" in item:
+                        adv_id = item["id"]
+                        if adv_id in adverts_dict:
+                            adverts_dict[adv_id]["status"] = item["status"]
+                
+                if "nm_settings" in item:
+                    if "id" in item:
+                        adv_id = item["id"]
+                        if adv_id in adverts_dict:
+                            adverts_dict[adv_id]["nm_settings"] = item.get("nm_settings", [])
+            
+            # 如果上面的逻辑没有工作，尝试直接解析完整对象
+            if not adverts_dict and items:
+                for item in items:
+                    if isinstance(item, dict):
+                        advert = {
+                            "id": item.get("id") or item.get("advertId"),
+                            "name": item.get("name") or item.get("advertName") or item.get("title"),
+                            "payment_type": item.get("payment_type"),
+                            "status": item.get("status"),
+                            "placements": item.get("placements"),
+                            "nm_settings": item.get("nm_settings", [])
+                        }
+                        
+                        if "settings" in item and isinstance(item["settings"], dict):
+                            s = item["settings"]
+                            if not advert["name"]:
+                                advert["name"] = s.get("name") or s.get("advertName")
+                            if not advert["payment_type"]:
+                                advert["payment_type"] = s.get("payment_type")
+                            if not advert["placements"]:
+                                advert["placements"] = s.get("placements")
+                        
+                        if advert["id"] is not None:
+                            adverts_dict[advert["id"]] = advert
+            
+            adverts = list(adverts_dict.values())
+            return adverts
+            
         except Exception as e:
             raise RuntimeError(f"获取广告列表异常: {e}")
     
@@ -144,44 +231,81 @@ class WBFetcher:
         """
         获取所有广告活动的完整数据（包括统计信息）
         返回DataFrame，包含：campaignId, name, status, ctr, clicks, shows, spend, roi, position等
+        
+        注意：由于API限制，统计数据获取可能较慢，这里先获取基本信息
         """
         campaigns_list = self.get_campaigns_list()
         
+        if not campaigns_list:
+            return pd.DataFrame()
+        
         all_data = []
-        for campaign in campaigns_list:
+        total = len(campaigns_list)
+        
+        # 使用进度条显示（如果在Streamlit环境中）
+        try:
+            import streamlit as st
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+        except:
+            progress_bar = None
+            status_text = None
+        
+        for idx, campaign in enumerate(campaigns_list):
             campaign_id = campaign.get("id") or campaign.get("campaignId")
             if not campaign_id:
                 continue
             
-            # 获取统计数据
+            # 更新进度
+            if progress_bar and status_text:
+                progress = (idx + 1) / total
+                progress_bar.progress(progress)
+                status_text.text(f"正在处理广告 {idx + 1}/{total}: {campaign_id}")
+            
+            # 获取统计数据（可选，如果API支持）
             try:
                 stats = self.get_campaign_stats(campaign_id)
                 
                 # 解析统计数据
                 stats_data = stats.get("result", [])
                 if isinstance(stats_data, list) and len(stats_data) > 0:
-                    # 取最新的统计数据
-                    latest_stat = stats_data[-1] if isinstance(stats_data[-1], dict) else {}
+                    # 汇总所有统计数据
+                    total_ctr = 0.0
+                    total_clicks = 0
+                    total_shows = 0
+                    total_spend = 0.0
+                    total_roi = 0.0
+                    count = 0
                     
-                    # 提取关键指标
+                    for stat in stats_data:
+                        if isinstance(stat, dict):
+                            total_ctr += stat.get("ctr", 0.0)
+                            total_clicks += stat.get("clicks", 0)
+                            total_shows += stat.get("shows", 0)
+                            total_spend += stat.get("spend", 0.0)
+                            total_roi += stat.get("roi", 0.0)
+                            count += 1
+                    
+                    avg_ctr = total_ctr / count if count > 0 else 0.0
+                    avg_roi = total_roi / count if count > 0 else 0.0
+                    
                     campaign_data = {
                         "campaignId": campaign_id,
                         "name": campaign.get("name") or campaign.get("advertName", ""),
                         "status": campaign.get("status", -1),
                         "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
-                        "ctr": latest_stat.get("ctr", 0.0),
-                        "clicks": latest_stat.get("clicks", 0),
-                        "shows": latest_stat.get("shows", 0),
-                        "spend": latest_stat.get("spend", 0.0),
-                        "roi": latest_stat.get("roi", 0.0),
-                        "position": latest_stat.get("position", 0),
-                        "sku": latest_stat.get("sku", ""),
-                        "keyword": latest_stat.get("keyword", ""),
+                        "ctr": avg_ctr,
+                        "clicks": total_clicks,
+                        "shows": total_shows,
+                        "spend": total_spend,
+                        "roi": avg_roi,
+                        "position": 0,  # 需要从其他API获取
+                        "sku": "",
+                        "keyword": "",
                         "fetch_time": datetime.now().isoformat(),
                     }
-                    all_data.append(campaign_data)
                 else:
-                    # 如果没有统计数据，至少保存基本信息
+                    # 如果没有统计数据，保存基本信息
                     campaign_data = {
                         "campaignId": campaign_id,
                         "name": campaign.get("name") or campaign.get("advertName", ""),
@@ -197,10 +321,10 @@ class WBFetcher:
                         "keyword": "",
                         "fetch_time": datetime.now().isoformat(),
                     }
-                    all_data.append(campaign_data)
+                all_data.append(campaign_data)
             except Exception as e:
                 # 如果获取统计数据失败，至少保存基本信息
-                print(f"警告: 获取广告 {campaign_id} 统计数据失败: {e}")
+                # 不打印错误，避免干扰用户
                 campaign_data = {
                     "campaignId": campaign_id,
                     "name": campaign.get("name") or campaign.get("advertName", ""),
@@ -217,6 +341,12 @@ class WBFetcher:
                     "fetch_time": datetime.now().isoformat(),
                 }
                 all_data.append(campaign_data)
+        
+        # 清除进度条
+        if progress_bar:
+            progress_bar.empty()
+        if status_text:
+            status_text.empty()
         
         df = pd.DataFrame(all_data)
         
