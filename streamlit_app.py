@@ -703,33 +703,41 @@ def page_smartbid_overview():
     
     st.markdown("---")
     
+    # 数据采集按钮区域（始终显示）
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown("#### 📊 数据采集")
+    with col2:
+        if st.button("🔄 立即采集数据", disabled=not token, use_container_width=True):
+            if not token:
+                st.error("⚠️ 请先配置WB API Token")
+            else:
+                with st.spinner("正在采集数据..."):
+                    try:
+                        # 使用提供的Token创建fetcher
+                        fetcher = WBFetcher(token=token)
+                        df = fetcher.fetch_all_campaigns_data()
+                        st.success(f"✅ 成功采集 {len(df)} 条广告数据")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 采集失败: {e}")
+                        import traceback
+                        with st.expander("🔍 详细错误信息", expanded=False):
+                            st.code(traceback.format_exc())
+    
+    st.info("""
+    **数据采集说明：** 
+    - 数据采集会获取广告基本信息（ID、名称、状态等）
+    - 统计数据（CTR、ROI、花费等）可能需要从WB后台手动获取或通过其他API端点
+    - 如果统计数据为0，这是正常的，因为WB API可能不提供这些数据
+    """)
+    
+    st.markdown("---")
+    
     df = load_campaigns_data()
     
     if df.empty:
-        st.warning("暂无广告数据，请先执行数据采集")
-        st.info("""
-        **注意：** 
-        - 数据采集会获取广告基本信息（ID、名称、状态等）
-        - 统计数据（CTR、ROI、花费等）可能需要从WB后台手动获取或通过其他API端点
-        - 如果统计数据为0，这是正常的，因为WB API可能不提供这些数据
-        """)
-        if st.button("🔄 立即采集数据", disabled=not token):
-            if not token:
-                st.error("⚠️ 请先配置WB API Token")
-                return
-            
-            with st.spinner("正在采集数据..."):
-                try:
-                    # 使用提供的Token创建fetcher
-                    fetcher = WBFetcher(token=token)
-                    df = fetcher.fetch_all_campaigns_data()
-                    st.success(f"✅ 成功采集 {len(df)} 条广告数据")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ 采集失败: {e}")
-                    import traceback
-                    with st.expander("🔍 详细错误信息", expanded=False):
-                        st.code(traceback.format_exc())
+        st.warning("暂无广告数据，请点击上方的「立即采集数据」按钮开始采集")
         return
     
     # 计算关键指标

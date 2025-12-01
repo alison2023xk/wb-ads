@@ -196,6 +196,37 @@ class WBFetcher:
         except Exception as e:
             raise RuntimeError(f"获取广告列表异常: {e}")
     
+    def get_campaign_detail(self, campaign_id: int) -> Dict:
+        """
+        获取广告活动的详细信息
+        GET /adv/v0/params 或 /adv/v1/upd
+        
+        Args:
+            campaign_id: 广告活动ID（整数）
+        """
+        # 确保campaign_id是整数
+        try:
+            campaign_id = int(campaign_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"无效的广告ID: {campaign_id}")
+        
+        # 尝试获取广告详情
+        endpoints_to_try = [
+            ("/adv/v0/params", {"id": campaign_id}),
+            ("/adv/v1/upd", {"id": campaign_id}),
+        ]
+        
+        for endpoint, params in endpoints_to_try:
+            try:
+                resp = self._request("GET", endpoint, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data
+            except Exception:
+                continue
+        
+        return {}
+    
     def get_campaign_stats(self, campaign_id: int, date_from: str = None, 
                           date_to: str = None) -> Dict:
         """
@@ -218,11 +249,12 @@ class WBFetcher:
         except (ValueError, TypeError):
             raise ValueError(f"无效的广告ID: {campaign_id}")
         
-        # 尝试多个API端点
+        # 尝试多个统计数据API端点
         endpoints_to_try = [
-            ("/adv/v1/upd", {"id": campaign_id}),  # 获取广告详情
-            ("/adv/v0/params", {"id": campaign_id}),  # 获取参数
-            ("/adv/v3/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),  # 统计数据
+            ("/adv/v1/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
+            ("/adv/v0/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
+            ("/adv/v3/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
+            ("/adv/v2/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
         ]
         
         for endpoint, params in endpoints_to_try:
@@ -231,7 +263,8 @@ class WBFetcher:
                 if resp.status_code == 200:
                     data = resp.json()
                     return data
-            except Exception:
+            except Exception as e:
+                # 记录错误但继续尝试下一个端点
                 continue
         
         # 如果所有端点都失败，返回空字典
@@ -239,11 +272,13 @@ class WBFetcher:
     
     def fetch_all_campaigns_data(self) -> pd.DataFrame:
         """
-        获取所有广告活动的完整数据（包括统计信息）
-        返回DataFrame，包含：campaignId, name, status, ctr, clicks, shows, spend, roi, position等
+        获取所有广告活动的完整数据
+        步骤1: 获取广告ID和状态
+        步骤2: 通过广告ID获取每个广告的统计数据
         
-        注意：由于API限制，统计数据获取可能较慢，这里先获取基本信息
+        返回DataFrame，包含：campaignId, name, status, ctr, clicks, shows, spend, roi, position等
         """
+        # 步骤1: 获取广告列表（ID和状态）
         campaigns_list = self.get_campaigns_list()
         
         if not campaigns_list:
@@ -261,6 +296,7 @@ class WBFetcher:
             progress_bar = None
             status_text = None
         
+        # 步骤2: 对每个广告，获取详细数据
         for idx, campaign in enumerate(campaigns_list):
             campaign_id = campaign.get("id") or campaign.get("campaignId")
             if not campaign_id:
@@ -270,24 +306,21 @@ class WBFetcher:
             try:
                 campaign_id = int(campaign_id)
             except (ValueError, TypeError):
-                # 如果无法转换为整数，跳过
                 continue
             
             # 更新进度
             if progress_bar and status_text:
                 progress = (idx + 1) / total
                 progress_bar.progress(progress)
-                status_text.text(f"正在处理广告 {idx + 1}/{total}: {campaign_id}")
+                status_text.text(f"步骤1/2: 获取广告 {idx + 1}/{total} (ID: {campaign_id})")
             
-            # 获取统计数据（可选，如果API支持）
-            # 注意：WB API可能没有统一的统计数据端点，这里先保存基本信息
-            # 统计数据可能需要通过其他方式获取或手动输入
+            # 先保存基本信息（ID和状态）
             campaign_data = {
                 "campaignId": int(campaign_id),  # 确保是整数类型
                 "name": campaign.get("name") or campaign.get("advertName", ""),
                 "status": int(campaign.get("status", -1)) if campaign.get("status") is not None else -1,
                 "status_label": STATUS_LABELS.get(campaign.get("status", -1), "unknown"),
-                "ctr": 0.0,  # 需要从其他API或数据源获取
+                "ctr": 0.0,
                 "clicks": 0,
                 "shows": 0,
                 "spend": 0.0,
@@ -298,12 +331,34 @@ class WBFetcher:
                 "fetch_time": datetime.now().isoformat(),
             }
             
-            # 尝试获取统计数据（如果API支持）
+            # 步骤2: 通过广告ID获取详细数据和统计数据
+            if progress_bar and status_text:
+                status_text.text(f"步骤2/2: 获取广告 {idx + 1}/{total} (ID: {campaign_id}) 的统计数据...")
+            
+            # 尝试获取广告详情
+            try:
+                detail = self.get_campaign_detail(campaign_id)
+                if detail:
+                    # 从详情中提取可能的数据
+                    if isinstance(detail, dict):
+                        # 尝试提取出价、关键词等信息
+                        if "params" in detail:
+                            params = detail["params"]
+                            if isinstance(params, list) and len(params) > 0:
+                                # 如果有参数列表，尝试提取第一个的关键词和SKU
+                                first_param = params[0] if isinstance(params[0], dict) else {}
+                                campaign_data["keyword"] = first_param.get("keyword", "")
+                                campaign_data["sku"] = str(first_param.get("sku", ""))
+            except Exception:
+                pass
+            
+            # 尝试获取统计数据
             try:
                 stats = self.get_campaign_stats(campaign_id)
                 if stats:
                     # 尝试从不同格式的响应中提取数据
-                    stats_data = stats.get("result", stats.get("data", []))
+                    stats_data = stats.get("result", stats.get("data", stats.get("stats", [])))
+                    
                     if isinstance(stats_data, list) and len(stats_data) > 0:
                         # 汇总统计数据
                         total_ctr = 0.0
@@ -315,11 +370,18 @@ class WBFetcher:
                         
                         for stat in stats_data:
                             if isinstance(stat, dict):
-                                total_ctr += float(stat.get("ctr", 0.0) or 0.0)
-                                total_clicks += int(stat.get("clicks", 0) or 0)
-                                total_shows += int(stat.get("shows", 0) or 0)
-                                total_spend += float(stat.get("spend", 0.0) or 0.0)
-                                total_roi += float(stat.get("roi", 0.0) or 0.0)
+                                # 尝试多种可能的字段名
+                                ctr_val = stat.get("ctr") or stat.get("CTR") or 0.0
+                                clicks_val = stat.get("clicks") or stat.get("Clicks") or 0
+                                shows_val = stat.get("shows") or stat.get("Shows") or stat.get("views") or 0
+                                spend_val = stat.get("spend") or stat.get("Spend") or stat.get("sum") or 0.0
+                                roi_val = stat.get("roi") or stat.get("ROI") or 0.0
+                                
+                                total_ctr += float(ctr_val or 0.0)
+                                total_clicks += int(clicks_val or 0)
+                                total_shows += int(shows_val or 0)
+                                total_spend += float(spend_val or 0.0)
+                                total_roi += float(roi_val or 0.0)
                                 count += 1
                         
                         if count > 0:
@@ -330,13 +392,14 @@ class WBFetcher:
                             campaign_data["roi"] = total_roi / count
                     elif isinstance(stats, dict):
                         # 直接是字典格式
-                        campaign_data["ctr"] = float(stats.get("ctr", 0.0) or 0.0)
-                        campaign_data["clicks"] = int(stats.get("clicks", 0) or 0)
-                        campaign_data["shows"] = int(stats.get("shows", 0) or 0)
-                        campaign_data["spend"] = float(stats.get("spend", 0.0) or 0.0)
-                        campaign_data["roi"] = float(stats.get("roi", 0.0) or 0.0)
-            except Exception:
+                        campaign_data["ctr"] = float(stats.get("ctr", stats.get("CTR", 0.0)) or 0.0)
+                        campaign_data["clicks"] = int(stats.get("clicks", stats.get("Clicks", 0)) or 0)
+                        campaign_data["shows"] = int(stats.get("shows", stats.get("Shows", stats.get("views", 0))) or 0)
+                        campaign_data["spend"] = float(stats.get("spend", stats.get("Spend", stats.get("sum", 0.0))) or 0.0)
+                        campaign_data["roi"] = float(stats.get("roi", stats.get("ROI", 0.0)) or 0.0)
+            except Exception as e:
                 # 统计数据获取失败，使用默认值0
+                # 不打印错误，避免干扰用户
                 pass
             
             all_data.append(campaign_data)
@@ -348,6 +411,10 @@ class WBFetcher:
             status_text.empty()
         
         df = pd.DataFrame(all_data)
+        
+        # 确保campaignId是整数类型
+        if "campaignId" in df.columns:
+            df["campaignId"] = df["campaignId"].astype(int)
         
         # 保存到缓存
         if len(df) > 0:
