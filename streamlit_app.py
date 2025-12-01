@@ -532,7 +532,7 @@ def page_scheduler():
     with st.expander("⚙️ API配置信息", expanded=False):
         st.write(f"**API地址:** `{API_BASE}/config/save`")
         st.write(f"**认证方式:** {'Bearer Token' if HEADERS else '无认证'}")
-        st.info("💡 如果API端点不存在，请使用"下载配置文件"功能，然后手动上传到服务器")
+        st.info("💡 如果API端点不存在，请使用「下载配置文件」功能，然后手动上传到服务器")
     
     if st.button("💾 保存到服务器"):
         yaml_data = st.session_state.get("scheduler_yaml_data", "")
