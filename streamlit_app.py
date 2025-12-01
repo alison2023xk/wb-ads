@@ -74,7 +74,7 @@ def get_token_from_env_or_secrets() -> str:
     return token
 
 # ==================== 定时开关功能 ====================
-
+    
 def wb_get_auction_adverts(token: str, statuses: str = "4,7,8,9,11", raw_data=None) -> List[Dict]:
     """读取广告活动信息"""
     if raw_data is None:
@@ -272,241 +272,241 @@ def decide_now_action(now: dtime, rules: List[dict]) -> Tuple[str | None, str]:
 def page_scheduler():
     """定时开关功能页面"""
     st.header("⏰ 广告定时开关")
-    
+
     with st.expander("📖 使用说明", expanded=False):
-        st.markdown("""
+    st.markdown("""
         ### 功能说明：
-        1. **配置规则**：可视化设置广告的定时开关规则
-        2. **生成配置文件**：导出 YAML 配置文件供定时任务使用
-        3. **测试执行**：可以立即执行一次来测试规则是否正确
-        
-        ### ⚠️ 重要说明：
-        - **"Run once"按钮**：只执行**一次**，不会自动重复执行
-        - **要实现定时自动执行**：需要使用 `wb_ad_auto_scheduler.py` 脚本（后台定时任务）
-        """)
-    
-    # Token 输入
-    token_default = get_token_from_env_or_secrets()
-    token = st.text_input("Promotion API Token（若已在 Secrets 可留空）", value=token_default, type="password")
-    if not token:
-        st.warning("未提供 Token。加载活动与执行操作将不可用。")
-    
-    # 加载广告活动
-    left, right = st.columns([1, 2])
-    with left:
-        show_debug = st.checkbox("显示调试信息", value=False, help="查看API原始返回数据")
-        if st.button("🔄 加载广告活动（类型9，自定义/统一）", use_container_width=True, disabled=not token):
-            try:
-                url = f"{WB_API_BASE}/adv/v0/auction/adverts"
-                headers = {"Authorization": token}
-                params = {"statuses": "4,7,8,9,11"}
-                r = requests.get(url, headers=headers, params=params, timeout=20)
-                if r.status_code != 200:
-                    raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
-                raw_data = r.json()
-                
-                if show_debug:
-                    with st.expander("🔍 API原始数据（调试）", expanded=True):
-                        st.json(raw_data)
-                
-                adverts = wb_get_auction_adverts(token, raw_data=raw_data)
+1. **配置规则**：可视化设置广告的定时开关规则
+2. **生成配置文件**：导出 YAML 配置文件供定时任务使用
+3. **测试执行**：可以立即执行一次来测试规则是否正确
+
+### ⚠️ 重要说明：
+- **"Run once"按钮**：只执行**一次**，不会自动重复执行
+- **要实现定时自动执行**：需要使用 `wb_ad_auto_scheduler.py` 脚本（后台定时任务）
+""")
+
+# Token 输入
+token_default = get_token_from_env_or_secrets()
+token = st.text_input("Promotion API Token（若已在 Secrets 可留空）", value=token_default, type="password")
+if not token:
+    st.warning("未提供 Token。加载活动与执行操作将不可用。")
+
+# 加载广告活动
+left, right = st.columns([1, 2])
+with left:
+    show_debug = st.checkbox("显示调试信息", value=False, help="查看API原始返回数据")
+    if st.button("🔄 加载广告活动（类型9，自定义/统一）", use_container_width=True, disabled=not token):
+        try:
+            url = f"{WB_API_BASE}/adv/v0/auction/adverts"
+            headers = {"Authorization": token}
+            params = {"statuses": "4,7,8,9,11"}
+            r = requests.get(url, headers=headers, params=params, timeout=20)
+            if r.status_code != 200:
+                raise RuntimeError(f"auction/adverts {r.status_code}: {r.text}")
+            raw_data = r.json()
+            
+            if show_debug:
+                with st.expander("🔍 API原始数据（调试）", expanded=True):
+                    st.json(raw_data)
+            
+            adverts = wb_get_auction_adverts(token, raw_data=raw_data)
                 st.session_state["scheduler_adverts"] = adverts
                 st.session_state["scheduler_raw_data"] = raw_data
-                st.success(f"加载到 {len(adverts)} 条活动")
-            except Exception as e:
-                st.error(f"加载失败：{e}")
-                if show_debug:
+            st.success(f"加载到 {len(adverts)} 条活动")
+        except Exception as e:
+            st.error(f"加载失败：{e}")
+            if show_debug:
                     import traceback
-                    st.code(traceback.format_exc())
-    
-    # 展示广告列表并选择
+                st.code(traceback.format_exc())
+
+# 展示广告列表并选择
     adverts = st.session_state.get("scheduler_adverts", [])
-    if adverts:
-        df = []
-        for a in adverts:
-            df.append({
-                "ID": a["id"],
-                "名称": a.get("name"),
-                "状态": STATUS_LABELS.get(a.get("status"), a.get("status")),
-                "付费": a.get("payment_type"),
-            })
-        st.dataframe(pd.DataFrame(df))
-        
-        options = {f'{row["名称"] or "未命名"} (#{row["ID"]})': row["ID"] for row in df}
-        id_to_name = {row["ID"]: row["名称"] or "未命名" for row in df}
-        selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
-        selected_ids = [options[k] for k in selected_labels]
+if adverts:
+    df = []
+    for a in adverts:
+        df.append({
+            "ID": a["id"],
+            "名称": a.get("name"),
+            "状态": STATUS_LABELS.get(a.get("status"), a.get("status")),
+            "付费": a.get("payment_type"),
+        })
+    st.dataframe(pd.DataFrame(df))
+
+    options = {f'{row["名称"] or "未命名"} (#{row["ID"]})': row["ID"] for row in df}
+    id_to_name = {row["ID"]: row["名称"] or "未命名" for row in df}
+    selected_labels = st.multiselect("选择要控制的广告活动", list(options.keys()))
+    selected_ids = [options[k] for k in selected_labels]
         st.session_state["scheduler_id_to_name"] = id_to_name
         st.session_state["scheduler_selected_ids"] = selected_ids
-        
-        if selected_ids:
+    
+    if selected_ids:
             st.info(f"已选择 {len(selected_ids)} 个广告活动")
-    else:
-        selected_ids = []
+else:
+    selected_ids = []
         st.session_state["scheduler_id_to_name"] = {}
         st.session_state["scheduler_selected_ids"] = []
-    
-    st.markdown("---")
-    
-    # 规则编辑
-    st.subheader("规则设置")
-    timezone = st.selectbox("时区（用于时间计算）", ["Europe/Moscow","Europe/Berlin","Asia/Shanghai","UTC"], index=0)
+
+st.markdown("---")
+
+# 规则编辑
+st.subheader("规则设置")
+timezone = st.selectbox("时区（用于时间计算）", ["Europe/Moscow","Europe/Berlin","Asia/Shanghai","UTC"], index=0)
     st.session_state["scheduler_timezone"] = timezone
     
     if "scheduler_rules" not in st.session_state:
         st.session_state["scheduler_rules"] = []
-    
-    weekdays_map = {"周一":1,"周二":2,"周三":3,"周四":4,"周五":5,"周六":6,"周日":7}
-    
-    col_add, col_clear = st.columns([1, 1])
-    with col_add:
-        if st.button("➕ 添加新规则", use_container_width=True):
+
+weekdays_map = {"周一":1,"周二":2,"周三":3,"周四":4,"周五":5,"周六":6,"周日":7}
+
+col_add, col_clear = st.columns([1, 1])
+with col_add:
+    if st.button("➕ 添加新规则", use_container_width=True):
             st.session_state["scheduler_rules"].append({
                 "name": f"规则 {len(st.session_state['scheduler_rules']) + 1}",
-                "weekdays": [],
+            "weekdays": [],
                 "time_ranges": [],
                 "periods": [],
-                "enabled": True
-            })
-    with col_clear:
-        if st.button("🗑️ 清空所有规则", use_container_width=True):
+            "enabled": True
+        })
+with col_clear:
+    if st.button("🗑️ 清空所有规则", use_container_width=True):
             st.session_state["scheduler_rules"] = []
     
     rules = st.session_state.get("scheduler_rules", [])
-    if not rules:
-        st.info("👆 点击「添加新规则」开始配置")
-    
-    rules = [dict(rule) for rule in rules] if rules else []
-    
-    for rule_idx, rule in enumerate(rules):
-        with st.expander(f"📌 {rule.get('name', f'规则 {rule_idx + 1}')} {'✅' if rule.get('enabled', True) else '❌'}", expanded=True):
-            col_name, col_enabled = st.columns([3, 1])
-            with col_name:
+if not rules:
+    st.info("👆 点击「添加新规则」开始配置")
+
+rules = [dict(rule) for rule in rules] if rules else []
+
+for rule_idx, rule in enumerate(rules):
+    with st.expander(f"📌 {rule.get('name', f'规则 {rule_idx + 1}')} {'✅' if rule.get('enabled', True) else '❌'}", expanded=True):
+        col_name, col_enabled = st.columns([3, 1])
+        with col_name:
                 rule["name"] = st.text_input("规则名称", value=rule.get("name", f"规则 {rule_idx + 1}"), key=f"scheduler_rule_name_{rule_idx}")
-            with col_enabled:
+        with col_enabled:
                 rule["enabled"] = st.checkbox("启用", value=rule.get("enabled", True), key=f"scheduler_rule_enabled_{rule_idx}")
-            
-            st.markdown("**选择星期几**")
-            weekdays_labels = st.multiselect(
-                "星期（可多选）", 
-                list(weekdays_map.keys()), 
-                default=[k for k, v in weekdays_map.items() if v in rule.get("weekdays", [])],
+        
+        st.markdown("**选择星期几**")
+        weekdays_labels = st.multiselect(
+            "星期（可多选）", 
+            list(weekdays_map.keys()), 
+            default=[k for k, v in weekdays_map.items() if v in rule.get("weekdays", [])],
                 key=f"scheduler_rule_weekdays_{rule_idx}"
-            )
-            rule["weekdays"] = [weekdays_map[k] for k in weekdays_labels]
-            
-            st.markdown("**时间段设置**")
-            time_ranges = rule.get("time_ranges", [])
-            if time_ranges:
-                current_periods_count = len(time_ranges)
-            else:
-                periods_count = len(rule.get("periods", []))
-                current_periods_count = max(1, periods_count // 2) if periods_count > 0 else 1
-            
-            n_periods = st.number_input(
-                "时间段数量", 
-                min_value=1, 
-                max_value=10, 
+        )
+        rule["weekdays"] = [weekdays_map[k] for k in weekdays_labels]
+        
+        st.markdown("**时间段设置**")
+        time_ranges = rule.get("time_ranges", [])
+        if time_ranges:
+            current_periods_count = len(time_ranges)
+        else:
+            periods_count = len(rule.get("periods", []))
+            current_periods_count = max(1, periods_count // 2) if periods_count > 0 else 1
+        
+        n_periods = st.number_input(
+            "时间段数量", 
+            min_value=1, 
+            max_value=10, 
                 value=current_periods_count,
-                step=1,
+            step=1,
                 key=f"scheduler_n_periods_{rule_idx}"
-            )
-            
-            time_ranges = []
-            for i in range(n_periods):
-                st.markdown(f"**时间段 {i+1}**")
-                existing_ranges = rule.get("time_ranges", [])
-                if i < len(existing_ranges):
-                    existing_range = existing_ranges[i]
-                    start_str = existing_range.get("start", "09:00")
-                    end_str = existing_range.get("end", "18:00")
-                else:
-                    existing_periods = rule.get("periods", [])
-                    if existing_periods and len(existing_periods) >= 2 * i + 1:
-                        start_period = existing_periods[2 * i]
-                        end_period = existing_periods[2 * i + 1] if 2 * i + 1 < len(existing_periods) else existing_periods[2 * i]
-                        start_str = start_period.get("start", "09:00")
+        )
+        
+        time_ranges = []
+        for i in range(n_periods):
+            st.markdown(f"**时间段 {i+1}**")
+            existing_ranges = rule.get("time_ranges", [])
+            if i < len(existing_ranges):
+                existing_range = existing_ranges[i]
+                start_str = existing_range.get("start", "09:00")
+                end_str = existing_range.get("end", "18:00")
+            else:
+                existing_periods = rule.get("periods", [])
+                if existing_periods and len(existing_periods) >= 2 * i + 1:
+                    start_period = existing_periods[2 * i]
+                    end_period = existing_periods[2 * i + 1] if 2 * i + 1 < len(existing_periods) else existing_periods[2 * i]
+                    start_str = start_period.get("start", "09:00")
                         end_str = end_period.get("start", "18:00")
-                    else:
-                        start_str = "09:00"
-                        end_str = "18:00"
-                
-                start_h, start_m = map(int, start_str.split(":"))
-                end_h, end_m = map(int, end_str.split(":"))
-                
-                c1, c2 = st.columns([1, 1])
-                with c1:
+                else:
+                    start_str = "09:00"
+                    end_str = "18:00"
+            
+            start_h, start_m = map(int, start_str.split(":"))
+            end_h, end_m = map(int, end_str.split(":"))
+            
+            c1, c2 = st.columns([1, 1])
+            with c1:
                     start_time = st.time_input(f"开始时间（执行开始动作）", value=dtime(start_h, start_m), key=f"scheduler_start_{rule_idx}_{i}")
-                with c2:
+            with c2:
                     end_time = st.time_input(f"结束时间（执行结束动作）", value=dtime(end_h, end_m), key=f"scheduler_end_{rule_idx}_{i}")
-                
-                time_ranges.append({
-                    "start": start_time.strftime("%H:%M"), 
-                    "end": end_time.strftime("%H:%M")
-                })
             
-            rule["time_ranges"] = time_ranges
+            time_ranges.append({
+                "start": start_time.strftime("%H:%M"), 
+                "end": end_time.strftime("%H:%M")
+            })
+        
+        rule["time_ranges"] = time_ranges
+        
+        periods = []
+        for tr in time_ranges:
+            start_str = tr["start"]
+            end_str = tr["end"]
             
-            periods = []
-            for tr in time_ranges:
-                start_str = tr["start"]
-                end_str = tr["end"]
-                
-                start_time_obj = datetime.strptime(start_str, "%H:%M").time()
-                start_dt = datetime.combine(date.today(), start_time_obj)
-                start_plus_1min = (start_dt + timedelta(minutes=1)).time()
-                start_end_str = start_plus_1min.strftime("%H:%M")
-                
-                periods.append({
-                    "start": start_str, 
+            start_time_obj = datetime.strptime(start_str, "%H:%M").time()
+            start_dt = datetime.combine(date.today(), start_time_obj)
+            start_plus_1min = (start_dt + timedelta(minutes=1)).time()
+            start_end_str = start_plus_1min.strftime("%H:%M")
+            
+            periods.append({
+                "start": start_str, 
                     "end": start_end_str,
-                    "action": "start"
-                })
-                
-                end_time_obj = datetime.strptime(end_str, "%H:%M").time()
-                end_dt = datetime.combine(date.today(), end_time_obj)
-                end_plus_1min = (end_dt + timedelta(minutes=1)).time()
-                end_end_str = end_plus_1min.strftime("%H:%M")
-                
-                periods.append({
-                    "start": end_str, 
+                "action": "start"
+            })
+            
+            end_time_obj = datetime.strptime(end_str, "%H:%M").time()
+            end_dt = datetime.combine(date.today(), end_time_obj)
+            end_plus_1min = (end_dt + timedelta(minutes=1)).time()
+            end_end_str = end_plus_1min.strftime("%H:%M")
+            
+            periods.append({
+                "start": end_str, 
                     "end": end_end_str,
-                    "action": "stop"
-                })
-            
-            rule["periods"] = periods
-            
+                "action": "stop"
+            })
+        
+        rule["periods"] = periods
+        
             if rule_idx < len(st.session_state.get("scheduler_rules", [])):
                 st.session_state["scheduler_rules"][rule_idx] = dict(rule)
-            else:
+        else:
                 st.session_state["scheduler_rules"] = st.session_state.get("scheduler_rules", [])
                 st.session_state["scheduler_rules"].append(dict(rule))
             
             if st.button("🗑️ 删除此规则", key=f"scheduler_delete_rule_{rule_idx}", use_container_width=True):
                 st.session_state["scheduler_rules"].pop(rule_idx)
-                st.rerun()
+            st.rerun()
     
     st.session_state["scheduler_rules"] = rules
-    
-    st.markdown("---")
-    
-    # 生成 YAML
+
+st.markdown("---")
+
+# 生成 YAML
     selected_ids = st.session_state.get("scheduler_selected_ids", [])
     rules = st.session_state.get("scheduler_rules", [])
     id_to_name = st.session_state.get("scheduler_id_to_name", {})
     timezone = st.session_state.get("scheduler_timezone", "Europe/Moscow")
-    disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
-    
-    if not disabled_generate:
-        yaml_str = build_yaml_config(selected_ids, id_to_name, rules, timezone)
+disabled_generate = (len(selected_ids) == 0) or (len(rules) == 0)
+
+if not disabled_generate:
+    yaml_str = build_yaml_config(selected_ids, id_to_name, rules, timezone)
         st.session_state["scheduler_yaml_data"] = yaml_str
-    else:
-        yaml_str = "# 请先选择广告活动并添加规则，配置将在此显示"
-    
-    st.markdown("#### 📄 生成的配置文件")
-    st.code(yaml_str, language="yaml")
-    
-    st.markdown("#### 📥 下载配置文件")
+else:
+    yaml_str = "# 请先选择广告活动并添加规则，配置将在此显示"
+
+st.markdown("#### 📄 生成的配置文件")
+st.code(yaml_str, language="yaml")
+
+st.markdown("#### 📥 下载配置文件")
     if not disabled_generate:
         st.download_button(
             label="📥 下载YAML配置",
@@ -523,11 +523,11 @@ def page_scheduler():
     show_save_debug = st.checkbox("🔍 显示保存调试信息", value=False, key="scheduler_show_save_debug", help="显示保存过程中的详细调试信息")
     
     # API配置
-    API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
-    HEADERS = {}
-    if os.environ.get("API_GATEWAY_TOKEN"):
-        HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
-    
+API_BASE = os.environ.get("API_BASE", "http://194.87.161.126/api")
+HEADERS = {}
+if os.environ.get("API_GATEWAY_TOKEN"):
+    HEADERS["Authorization"] = f"Bearer {os.environ['API_GATEWAY_TOKEN']}"
+
     # 显示当前API配置
     with st.expander("⚙️ API配置信息", expanded=False):
         st.write(f"**API地址:** `{API_BASE}/config/save`")
@@ -536,10 +536,10 @@ def page_scheduler():
     
     if st.button("💾 保存到服务器"):
         yaml_data = st.session_state.get("scheduler_yaml_data", "")
-        if not yaml_data or yaml_data.strip().startswith("# 请先"):
+    if not yaml_data or yaml_data.strip().startswith("# 请先"):
             st.error("请先生成有效配置")
         else:
-            if show_save_debug:
+                if show_save_debug:
                 with st.expander("🔍 请求调试信息", expanded=True):
                     st.write(f"**API地址:** {API_BASE}/config/save")
                     st.write(f"**请求方法:** POST")
@@ -556,16 +556,16 @@ def page_scheduler():
                     data=yaml_data.encode("utf-8"), 
                     timeout=10
                 )
-                
-                if show_save_debug:
+                            
+                            if show_save_debug:
                     with st.expander("🔍 响应调试信息", expanded=True):
                         st.write(f"**状态码:** {r.status_code}")
                         st.write(f"**响应头:**")
                         st.json(dict(r.headers))
                         st.write(f"**响应内容:**")
                         st.code(r.text[:1000] if r.text else "(空)")
-                
-                if r.status_code == 200:
+                            
+                            if r.status_code == 200:
                     st.success("✅ 配置已保存到服务器！")
                     st.info("💡 配置将在定时任务的下一个轮询周期自动生效")
                 elif r.status_code == 404:
@@ -594,12 +594,12 @@ EOF
                 elif r.status_code == 403:
                     st.error("⚠️ 保存失败: HTTP 403 - 权限不足")
                     st.info("请检查Token是否有保存配置的权限")
-                else:
+            else:
                     st.error(f"⚠️ 保存失败: HTTP {r.status_code}")
                     st.write("**服务器响应：**")
                     st.code(r.text[:500] if r.text else "(无响应内容)")
                     
-            except requests.exceptions.ConnectionError as e:
+        except requests.exceptions.ConnectionError as e:
                 st.error("⚠️ 无法连接到服务器")
                 st.info(f"""
                 **错误详情：** {str(e)}
@@ -614,48 +614,48 @@ EOF
                 - 检查API服务是否启动
                 - 使用"下载配置文件"功能作为替代方案
                 """)
-            except requests.exceptions.Timeout as e:
+        except requests.exceptions.Timeout as e:
                 st.error("⚠️ 请求超时")
                 st.info("服务器响应时间过长，请稍后重试或使用下载功能")
-            except Exception as e:
+        except Exception as e:
                 st.error(f"⚠️ 保存时发生错误: {e}")
-                if show_save_debug:
-                    import traceback
+            if show_save_debug:
+                import traceback
                     with st.expander("详细错误信息"):
                         st.code(traceback.format_exc())
-    
+
     # 立即执行一次
     st.markdown("---")
-    st.markdown("### ⏱ 立即执行一次（测试用）")
+st.markdown("### ⏱ 立即执行一次（测试用）")
     if st.button("🚀 立即执行一次", disabled=(not token or disabled_generate)):
-        now = datetime.now().time()
-        act, rule_name = decide_now_action(now, rules)
-        if not act:
-            st.info("当前时刻未命中任何时间段，不执行。")
-        else:
-            st.info(f"匹配规则：{rule_name}，执行动作：{act}")
-            results = []
+    now = datetime.now().time()
+    act, rule_name = decide_now_action(now, rules)
+    if not act:
+        st.info("当前时刻未命中任何时间段，不执行。")
+    else:
+        st.info(f"匹配规则：{rule_name}，执行动作：{act}")
+        results = []
             id_to_name = st.session_state.get("scheduler_id_to_name", {})
-            for adv_id in selected_ids:
-                adv_name = id_to_name.get(adv_id, "未命名")
-                if act == "start":
-                    res = wb_start(token, adv_id)
-                elif act == "pause":
-                    res = wb_pause(token, adv_id)
-                else:
-                    res = wb_stop(token, adv_id)
-                results.append({
-                    "id": adv_id,
-                    "name": adv_name,
-                    "action": act,
-                    "result": res
-                })
-            st.success("执行完成")
-            results_df = pd.DataFrame(results)
-            if not results_df.empty:
-                results_df = results_df[["name", "id", "action", "result"]]
-                results_df.columns = ["广告名称", "广告ID", "执行动作", "执行结果"]
-            st.dataframe(results_df, use_container_width=True)
+        for adv_id in selected_ids:
+            adv_name = id_to_name.get(adv_id, "未命名")
+            if act == "start":
+                res = wb_start(token, adv_id)
+            elif act == "pause":
+                res = wb_pause(token, adv_id)
+            else:
+                res = wb_stop(token, adv_id)
+            results.append({
+                "id": adv_id,
+                "name": adv_name,
+                "action": act,
+                "result": res
+            })
+        st.success("执行完成")
+        results_df = pd.DataFrame(results)
+        if not results_df.empty:
+            results_df = results_df[["name", "id", "action", "result"]]
+            results_df.columns = ["广告名称", "广告ID", "执行动作", "执行结果"]
+        st.dataframe(results_df, use_container_width=True)
 
 # ==================== 智能出价功能 ====================
 
@@ -703,41 +703,99 @@ def page_smartbid_overview():
     
     st.markdown("---")
     
-    # 数据采集按钮区域（始终显示）
+    # 步骤1: 获取广告列表（ID、状态、花费、是否运行）
+    st.markdown("#### 步骤1: 获取广告列表")
+    
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.markdown("#### 📊 数据采集")
+        st.markdown("获取所有广告的基本信息（ID、状态、花费、是否运行）")
     with col2:
-        if st.button("🔄 立即采集数据", disabled=not token, use_container_width=True):
+        if st.button("🔄 刷新广告列表", disabled=not token, use_container_width=True, key="refresh_campaigns"):
             if not token:
                 st.error("⚠️ 请先配置WB API Token")
             else:
-                with st.spinner("正在采集数据..."):
+                with st.spinner("正在获取广告列表..."):
                     try:
-                        # 使用提供的Token创建fetcher
                         fetcher = WBFetcher(token=token)
-                        df = fetcher.fetch_all_campaigns_data()
-                        st.success(f"✅ 成功采集 {len(df)} 条广告数据")
+                        campaigns_basic = fetcher.get_campaigns_with_basic_stats()
+                        st.session_state["smartbid_campaigns_basic"] = campaigns_basic
+                        st.success(f"✅ 成功获取 {len(campaigns_basic)} 个广告")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ 采集失败: {e}")
+                        st.error(f"❌ 获取失败: {e}")
                         import traceback
                         with st.expander("🔍 详细错误信息", expanded=False):
                             st.code(traceback.format_exc())
     
-    st.info("""
-    **数据采集说明：** 
-    - 数据采集会获取广告基本信息（ID、名称、状态等）
-    - 统计数据（CTR、ROI、花费等）可能需要从WB后台手动获取或通过其他API端点
-    - 如果统计数据为0，这是正常的，因为WB API可能不提供这些数据
-    """)
+    # 显示广告列表
+    campaigns_basic = st.session_state.get("smartbid_campaigns_basic", [])
     
-    st.markdown("---")
+    if campaigns_basic:
+        st.markdown("**广告列表（请选择要采集详细数据的广告）**")
+        
+        # 转换为DataFrame显示
+        basic_df = pd.DataFrame(campaigns_basic)
+        if "id" in basic_df.columns:
+            basic_df["id"] = basic_df["id"].astype(int)
+        
+        # 显示表格
+        display_cols = ["id", "name", "status_label", "spend", "is_running"]
+        available_cols = [col for col in display_cols if col in basic_df.columns]
+        st.dataframe(basic_df[available_cols], use_container_width=True)
+        
+        # 选择广告ID
+        st.markdown("#### 步骤2: 选择要采集详细数据的广告")
+        
+        # 创建选择列表
+        campaign_options = []
+        for camp in campaigns_basic:
+            camp_id = camp.get("id") or camp.get("campaignId")
+            camp_name = camp.get("name", "未命名")
+            camp_status = camp.get("status_label", "")
+            if camp_id:
+                campaign_options.append({
+                    "label": f"ID: {camp_id} - {camp_name} ({camp_status})",
+                    "value": int(camp_id)
+                })
+        
+        selected_campaign_ids = st.multiselect(
+            "选择广告ID（可多选）",
+            options=[opt["value"] for opt in campaign_options],
+            format_func=lambda x: next((opt["label"] for opt in campaign_options if opt["value"] == x), str(x)),
+            key="selected_campaign_ids"
+        )
+        
+        # 步骤3: 采集选中广告的详细数据
+        if selected_campaign_ids:
+            st.markdown("#### 步骤3: 采集选中广告的详细数据")
+            
+            if st.button("📥 采集选中广告的详细数据", disabled=not token, use_container_width=True):
+                if not token:
+                    st.error("⚠️ 请先配置WB API Token")
+                else:
+                    with st.spinner(f"正在采集 {len(selected_campaign_ids)} 个广告的详细数据..."):
+                        try:
+                            fetcher = WBFetcher(token=token)
+                            df = fetcher.fetch_campaigns_by_ids(selected_campaign_ids)
+                            st.success(f"✅ 成功采集 {len(df)} 个广告的详细数据")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 采集失败: {e}")
+                            import traceback
+                            with st.expander("🔍 详细错误信息", expanded=False):
+                                st.code(traceback.format_exc())
+    else:
+        st.info("👆 请点击「刷新广告列表」按钮获取广告列表")
+        st.markdown("---")
     
+    # 显示已采集的详细数据
     df = load_campaigns_data()
     
     if df.empty:
-        st.warning("暂无广告数据，请点击上方的「立即采集数据」按钮开始采集")
+        if campaigns_basic:
+            st.info("💡 请在上方选择广告ID，然后点击「采集选中广告的详细数据」")
+        else:
+            st.warning("暂无广告数据，请先刷新广告列表")
         return
     
     # 计算关键指标

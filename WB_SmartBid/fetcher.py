@@ -88,33 +88,20 @@ class WBFetcher:
     
     def get_campaigns_list(self) -> List[Dict]:
         """
-        获取所有活跃广告活动列表
+        获取所有活跃广告活动列表（基本信息：ID、状态、名称）
         使用 /adv/v0/auction/adverts 端点（与定时开关功能保持一致）
         """
         try:
-            # 尝试使用 /adv/v0/auction/adverts 端点
+            # 使用 /adv/v0/auction/adverts 端点
             params = {"statuses": "4,7,8,9,11"}  # ready, completed, declined, active, paused
             resp = self._request("GET", "/adv/v0/auction/adverts", params=params)
             
             if resp.status_code != 200:
-                # 如果失败，尝试备用端点
-                resp2 = self._request("GET", "/adv/v2/list")
-                if resp2.status_code == 200:
-                    data = resp2.json()
-                    if isinstance(data, dict):
-                        campaigns = data.get("result", data.get("data", []))
-                    elif isinstance(data, list):
-                        campaigns = data
-                    else:
-                        campaigns = []
-                    return campaigns
-                else:
-                    raise RuntimeError(f"获取广告列表失败: {resp.status_code} {resp.text}")
+                raise RuntimeError(f"获取广告列表失败: {resp.status_code} {resp.text}")
             
             data = resp.json()
             
             # 处理 /adv/v0/auction/adverts 返回的扁平化数组格式
-            # 参考 streamlit_app.py 中的 wb_get_auction_adverts 函数
             adverts = []
             if isinstance(data, list):
                 items = data
@@ -196,6 +183,94 @@ class WBFetcher:
         except Exception as e:
             raise RuntimeError(f"获取广告列表异常: {e}")
     
+    def get_campaigns_with_basic_stats(self) -> List[Dict]:
+        """
+        获取广告列表及其基本信息（ID、状态、花费等）
+        根据API文档：/adv/v1/upd 用于获取花费历史（Receiving Costs History）
+        
+        返回: List[Dict] 包含 id, name, status, spend, is_running 等字段
+        """
+        campaigns_list = self.get_campaigns_list()
+        
+        if not campaigns_list:
+            return []
+        
+        campaigns_with_stats = []
+        
+        # 使用进度条（如果在Streamlit环境中）
+        try:
+            import streamlit as st
+            total = len(campaigns_list)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+        except:
+            progress_bar = None
+            status_text = None
+        
+        for idx, campaign in enumerate(campaigns_list):
+            campaign_id = campaign.get("id") or campaign.get("campaignId")
+            if not campaign_id:
+                continue
+            
+            try:
+                campaign_id = int(campaign_id)
+            except (ValueError, TypeError):
+                continue
+            
+            # 更新进度
+            if progress_bar and status_text:
+                progress = (idx + 1) / total
+                progress_bar.progress(progress)
+                status_text.text(f"正在获取广告 {idx + 1}/{total} (ID: {campaign_id}) 的基本信息...")
+            
+            # 获取广告花费信息（根据API文档：/adv/v1/upd 获取花费历史）
+            spend = 0.0
+            is_running = False
+            
+            try:
+                # 根据API文档，/adv/v1/upd 用于获取花费历史
+                # 可能需要不同的参数，这里尝试获取
+                resp = self._request("GET", "/adv/v1/upd", params={"id": campaign_id})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # 解析花费数据（根据API文档，可能返回花费历史列表）
+                    if isinstance(data, list):
+                        # 如果是列表，汇总所有花费
+                        for item in data:
+                            if isinstance(item, dict):
+                                item_spend = float(item.get("sum", item.get("spend", item.get("total", 0.0))) or 0.0)
+                                spend += item_spend
+                    elif isinstance(data, dict):
+                        # 如果是字典，尝试提取花费
+                        spend = float(data.get("sum", data.get("spend", data.get("total", 0.0))) or 0.0)
+            except Exception:
+                # 如果获取花费失败，继续处理其他信息
+                pass
+            
+            # 判断是否运行中
+            status = campaign.get("status", -1)
+            is_running = (status == 9)  # 9 = active
+            
+            campaign_info = {
+                "id": int(campaign_id),
+                "campaignId": int(campaign_id),  # 兼容字段
+                "name": campaign.get("name") or campaign.get("advertName", ""),
+                "status": int(status) if status is not None else -1,
+                "status_label": STATUS_LABELS.get(status, "unknown"),
+                "spend": round(spend, 2),
+                "is_running": is_running,
+            }
+            
+            campaigns_with_stats.append(campaign_info)
+        
+        # 清除进度条
+        if progress_bar:
+            progress_bar.empty()
+        if status_text:
+            status_text.empty()
+        
+        return campaigns_with_stats
+    
     def get_campaign_detail(self, campaign_id: int) -> Dict:
         """
         获取广告活动的详细信息
@@ -231,7 +306,7 @@ class WBFetcher:
                           date_to: str = None) -> Dict:
         """
         获取广告活动的统计数据
-        尝试多个API端点
+        根据API文档：使用 /adv/v3/fullstats (GET) 或 /adv/v2/fullstats (POST)
         
         Args:
             campaign_id: 广告活动ID（整数）
@@ -249,26 +324,195 @@ class WBFetcher:
         except (ValueError, TypeError):
             raise ValueError(f"无效的广告ID: {campaign_id}")
         
-        # 尝试多个统计数据API端点
+        # 根据API文档，尝试正确的端点
+        # GET /adv/v3/fullstats - 获取统计数据
         endpoints_to_try = [
-            ("/adv/v1/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
-            ("/adv/v0/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
-            ("/adv/v3/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
-            ("/adv/v2/stat", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
+            ("GET", "/adv/v3/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
+            ("POST", "/adv/v2/fullstats", {"id": campaign_id, "dateFrom": date_from, "dateTo": date_to}),
         ]
         
-        for endpoint, params in endpoints_to_try:
+        for method, endpoint, params in endpoints_to_try:
             try:
-                resp = self._request("GET", endpoint, params=params)
+                if method == "GET":
+                    resp = self._request("GET", endpoint, params=params)
+                else:
+                    resp = self._request("POST", endpoint, json_body=params)
+                
                 if resp.status_code == 200:
                     data = resp.json()
                     return data
-            except Exception as e:
-                # 记录错误但继续尝试下一个端点
+            except Exception:
                 continue
         
         # 如果所有端点都失败，返回空字典
         return {}
+    
+    def fetch_campaigns_by_ids(self, campaign_ids: List[int]) -> pd.DataFrame:
+        """
+        根据选中的广告ID列表获取详细数据
+        
+        Args:
+            campaign_ids: 广告ID列表
+        
+        Returns:
+            DataFrame包含选中广告的详细数据
+        """
+        if not campaign_ids:
+            return pd.DataFrame()
+        
+        all_data = []
+        total = len(campaign_ids)
+        
+        # 使用进度条显示（如果在Streamlit环境中）
+        try:
+            import streamlit as st
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+        except:
+            progress_bar = None
+            status_text = None
+        
+        for idx, campaign_id in enumerate(campaign_ids):
+            # 确保是整数
+            try:
+                campaign_id = int(campaign_id)
+            except (ValueError, TypeError):
+                continue
+            
+            # 更新进度
+            if progress_bar and status_text:
+                progress = (idx + 1) / total
+                progress_bar.progress(progress)
+                status_text.text(f"正在获取广告 {idx + 1}/{total} (ID: {campaign_id}) 的详细数据...")
+            
+            # 先获取广告基本信息
+            campaigns_list = self.get_campaigns_list()
+            campaign_info = None
+            for camp in campaigns_list:
+                camp_id = camp.get("id") or camp.get("campaignId")
+                if camp_id and int(camp_id) == campaign_id:
+                    campaign_info = camp
+                    break
+            
+            if not campaign_info:
+                # 如果列表中没有，尝试直接获取
+                try:
+                    detail = self.get_campaign_detail(campaign_id)
+                    if detail:
+                        campaign_info = {
+                            "id": campaign_id,
+                            "name": detail.get("name", ""),
+                            "status": detail.get("status", -1),
+                        }
+                except:
+                    continue
+            
+            # 构建基础数据
+            campaign_data = {
+                "campaignId": int(campaign_id),
+                "name": campaign_info.get("name") if campaign_info else "",
+                "status": int(campaign_info.get("status", -1)) if campaign_info and campaign_info.get("status") is not None else -1,
+                "status_label": STATUS_LABELS.get(campaign_info.get("status", -1) if campaign_info else -1, "unknown"),
+                "ctr": 0.0,
+                "clicks": 0,
+                "shows": 0,
+                "spend": 0.0,
+                "roi": 0.0,
+                "position": 0,
+                "sku": "",
+                "keyword": "",
+                "fetch_time": datetime.now().isoformat(),
+            }
+            
+            # 获取广告详情
+            try:
+                detail = self.get_campaign_detail(campaign_id)
+                if detail and isinstance(detail, dict):
+                    if "params" in detail:
+                        params = detail["params"]
+                        if isinstance(params, list) and len(params) > 0:
+                            first_param = params[0] if isinstance(params[0], dict) else {}
+                            campaign_data["keyword"] = first_param.get("keyword", "")
+                            campaign_data["sku"] = str(first_param.get("sku", ""))
+            except Exception:
+                pass
+            
+            # 获取统计数据
+            try:
+                stats = self.get_campaign_stats(campaign_id)
+                if stats:
+                    # 解析统计数据
+                    stats_data = stats.get("result", stats.get("data", stats.get("stats", [])))
+                    
+                    if isinstance(stats_data, list) and len(stats_data) > 0:
+                        # 汇总统计数据
+                        total_ctr = 0.0
+                        total_clicks = 0
+                        total_shows = 0
+                        total_spend = 0.0
+                        total_roi = 0.0
+                        count = 0
+                        
+                        for stat in stats_data:
+                            if isinstance(stat, dict):
+                                ctr_val = stat.get("ctr") or stat.get("CTR") or 0.0
+                                clicks_val = stat.get("clicks") or stat.get("Clicks") or 0
+                                shows_val = stat.get("shows") or stat.get("Shows") or stat.get("views") or 0
+                                spend_val = stat.get("spend") or stat.get("Spend") or stat.get("sum") or 0.0
+                                roi_val = stat.get("roi") or stat.get("ROI") or 0.0
+                                
+                                total_ctr += float(ctr_val or 0.0)
+                                total_clicks += int(clicks_val or 0)
+                                total_shows += int(shows_val or 0)
+                                total_spend += float(spend_val or 0.0)
+                                total_roi += float(roi_val or 0.0)
+                                count += 1
+                        
+                        if count > 0:
+                            campaign_data["ctr"] = total_ctr / count
+                            campaign_data["clicks"] = total_clicks
+                            campaign_data["shows"] = total_shows
+                            campaign_data["spend"] = total_spend
+                            campaign_data["roi"] = total_roi / count
+                    elif isinstance(stats, dict):
+                        # 直接是字典格式
+                        campaign_data["ctr"] = float(stats.get("ctr", stats.get("CTR", 0.0)) or 0.0)
+                        campaign_data["clicks"] = int(stats.get("clicks", stats.get("Clicks", 0)) or 0)
+                        campaign_data["shows"] = int(stats.get("shows", stats.get("Shows", stats.get("views", 0))) or 0)
+                        campaign_data["spend"] = float(stats.get("spend", stats.get("Spend", stats.get("sum", 0.0))) or 0.0)
+                        campaign_data["roi"] = float(stats.get("roi", stats.get("ROI", 0.0)) or 0.0)
+            except Exception:
+                pass
+            
+            all_data.append(campaign_data)
+        
+        # 清除进度条
+        if progress_bar:
+            progress_bar.empty()
+        if status_text:
+            status_text.empty()
+        
+        df = pd.DataFrame(all_data)
+        
+        # 确保campaignId是整数类型
+        if "campaignId" in df.columns:
+            df["campaignId"] = df["campaignId"].astype(int)
+        
+        # 保存到缓存（追加模式，保留之前的数据）
+        if len(df) > 0:
+            if CAMPAIGNS_CACHE_PATH.exists():
+                # 读取现有数据
+                try:
+                    existing_df = pd.read_csv(CAMPAIGNS_CACHE_PATH, encoding="utf-8-sig")
+                    # 移除已存在的相同ID的数据
+                    existing_df = existing_df[~existing_df["campaignId"].isin(df["campaignId"])]
+                    # 合并新数据
+                    df = pd.concat([existing_df, df], ignore_index=True)
+                except:
+                    pass
+            df.to_csv(CAMPAIGNS_CACHE_PATH, index=False, encoding="utf-8-sig")
+        
+        return df
     
     def fetch_all_campaigns_data(self) -> pd.DataFrame:
         """
